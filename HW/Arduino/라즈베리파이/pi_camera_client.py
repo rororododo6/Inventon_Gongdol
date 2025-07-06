@@ -150,6 +150,32 @@ class ArduinoClient:
     def reset_stepper_position(self):
         """스테핑 모터 위치 초기화"""
         return self.send_command("reset_stepper_position")
+    
+    # === 새장 화장실 청소 시스템 기능들 ===
+    
+    def perform_cage_cleaning(self):
+        """새장 화장실 청소 수행 (모래 밀어내기 + 스테핑 모터)"""
+        return self.send_command("cage_cleaning")
+    
+    def activate_cleaning_servo(self):
+        """청소 서보 작동 (모래 밀어내기)"""
+        return self.send_command("activate_cleaning_servo")
+    
+    def reset_emergency_stop(self):
+        """긴급 정지 해제"""
+        return self.send_command("reset_emergency_stop")
+    
+    def reset_cleaning_cycles(self):
+        """청소 횟수 초기화"""
+        return self.send_command("reset_cleaning_cycles")
+    
+    def system_test(self):
+        """시스템 테스트 (LED 깜빡임 + 부저 소리)"""
+        return self.send_command("system_test")
+    
+    def get_system_status(self):
+        """상세한 시스템 상태 정보 요청"""
+        return self.send_command("get_status")
 
 class PiCameraAutoCleaningSystem:
     def __init__(self, resolution=(640, 480), framerate=30):
@@ -315,14 +341,14 @@ class PiCameraAutoCleaningSystem:
     
     def run(self):
         """메인 실행 루프"""
-        print("\n🚀 PI 카메라 자동 청소 시스템 시작!")
+        print("\n🚀 자동 청소 시스템 시작!")
         print("카메라 창에서 'q' 키로 종료, 'r' 키로 시스템 리셋")
         
         last_sensor_update = 0
         
         try:
             while True:
-                # PI 카메라에서 프레임 획득
+                # PI 카메라에서 프레임 캡처
                 frame = self.picam2.capture_array()
                 
                 # 센서 데이터 주기적 업데이트
@@ -339,40 +365,35 @@ class PiCameraAutoCleaningSystem:
                 for box in detection_boxes:
                     x1, y1, x2, y2 = box
                     cv2.rectangle(display_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                    cv2.putText(display_frame, "Bird Poop", (x1, y1-10), 
+                    cv2.putText(display_frame, "Bird Poop", (x1, y1-10),
                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
                 
                 # 상태 정보 표시
                 status_text = f"State: {self.state.value}"
-                cv2.putText(display_frame, status_text, (10, 30), 
+                cv2.putText(display_frame, status_text, (10, 30),
                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
                 
                 count_text = f"Clean: {self.clean_count}/{self.max_clean_count}"
-                cv2.putText(display_frame, count_text, (10, 60), 
+                cv2.putText(display_frame, count_text, (10, 60),
                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
                 
                 coverage_text = f"Coverage: {coverage_ratio:.1%}"
-                cv2.putText(display_frame, coverage_text, (10, 90), 
+                cv2.putText(display_frame, coverage_text, (10, 90),
                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-                
-                # 카메라 정보 표시
-                camera_text = "Raspberry Pi Camera Module"
-                cv2.putText(display_frame, camera_text, (10, 120), 
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 2)
                 
                 # 온습도 정보 표시
                 if self.last_temp is not None:
                     temp_text = f"Temp: {self.last_temp}C"
-                    cv2.putText(display_frame, temp_text, (10, 150), 
+                    cv2.putText(display_frame, temp_text, (10, 120),
                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 0), 2)
                 
                 if self.last_humidity is not None:
                     humidity_text = f"Humidity: {self.last_humidity}%"
-                    cv2.putText(display_frame, humidity_text, (10, 180), 
+                    cv2.putText(display_frame, humidity_text, (10, 150),
                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 0), 2)
                 
                 # 프레임 표시
-                cv2.imshow('Pi Camera Bird Poop Detection System', display_frame)
+                cv2.imshow('PI Camera Bird Poop Detection & Cleaning System', display_frame)
                 
                 # 청소 로직
                 if is_detected and self.state != SystemState.STOPPED:
@@ -416,10 +437,9 @@ class PiCameraAutoCleaningSystem:
             self.arduino.disable_stepper()
             self.arduino.disconnect()
         
-        # PI 카메라 정리
+        # PI 카메라 해제
         if hasattr(self, 'picam2'):
             self.picam2.stop()
-            self.picam2.close()
         
         cv2.destroyAllWindows()
         print("시스템 정리 완료!")
@@ -448,4 +468,4 @@ def main():
         print("4. 아두이노 연결 상태")
 
 if __name__ == "__main__":
-    main() 
+    main()
