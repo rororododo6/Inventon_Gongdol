@@ -5,7 +5,7 @@
 #include "functions.h"  // 함수 헤더 파일
 
 // 통신 관련 변수들
-const int BAUD_RATE = 115200;  // 통신 속도
+const long BAUD_RATE = 115200L;  // 통신 속도
 const int BUFFER_SIZE = 256;  // 버퍼 크기
 char inputBuffer[BUFFER_SIZE];  // 입력 버퍼
 int bufferIndex = 0;  // 버퍼 인덱스
@@ -38,7 +38,7 @@ struct SensorData {
 SensorData sensorData;  // 센서 데이터 구조체 인스턴스
 
 // JSON 문서 생성
-StaticJsonDocument<200> doc;  // JSON 문서 객체 생성
+JsonDocument doc;  // JSON 문서 객체 생성
 
 // 함수 선언
 void readSensorData();  // 센서 데이터 읽기
