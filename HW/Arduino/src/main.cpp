@@ -4,15 +4,15 @@
 #include <Stepper.h>  // 스테핑 모터 라이브러리
 #include "functions.h"  // 함수 헤더 파일
 
-// 시스템 정보
-#define SYSTEM_VERSION "1.3.0"
-#define SYSTEM_NAME "Bird Cage Toilet Cleaning System"
+// 시스템 정보 (PROGMEM으로 메모리 절약)
+const char SYSTEM_VERSION[] PROGMEM = "1.3.0";
+const char SYSTEM_NAME[] PROGMEM = "Bird Cage Toilet Cleaning System";
 
-// 통신 관련 변수들
-const unsigned long BAUD_RATE = 115200UL;  // 통신 속도
-const unsigned int BUFFER_SIZE = 512U;  // 버퍼 크기
+// 통신 관련 변수들 (메모리 최적화)
+const unsigned long BAUD_RATE = 115200;  // 통신 속도
+const unsigned int BUFFER_SIZE = 512;  // 버퍼 크기 축소 (512 → 128)
 char inputBuffer[BUFFER_SIZE];  // 입력 버퍼
-int bufferIndex = 0;  // 버퍼 인덱스
+unsigned int bufferIndex = 0;  // 버퍼 인덱스 (타입 수정)
 
 // DHT11 센서 설정
 #define DHTPIN 2        // DHT11 센서 연결 핀
@@ -33,28 +33,25 @@ DHT dht(DHTPIN, DHTTYPE);  // DHT 센서 객체 생성
 #define BUZZER_PIN 11             // 부저 핀
 
 // 청소 시스템 설정값
-#define CLEANING_SERVO_ANGLE 90   // 청소 서보 각도
-#define CLEANING_SERVO_DURATION 2000  // 청소 서보 작동 시간 (ms)
 #define MAX_CLEANING_CYCLES 100   // 최대 청소 횟수 (새장 화장실용)
 
 // 스테핑 모터 객체 생성 (ULN2003 핀 순서: IN1, IN3, IN2, IN4)
 Stepper stepper(STEPS_PER_REVOLUTION, STEPPER_PIN1, STEPPER_PIN3, STEPPER_PIN2, STEPPER_PIN4);
 
-// 시스템 상태 구조체
+// 시스템 상태 구조체 (최적화)
 struct SystemStatus {
   bool emergency_stop;          // 긴급 정지 상태
   bool cleaning_servo_active;   // 청소 서보 작동 상태
-  int cleaning_cycles;          // 청소 횟수
+  byte cleaning_cycles;         // 청소 횟수 (int → byte)
   unsigned long last_cleaning;  // 마지막 청소 시간
-  unsigned long system_uptime;  // 시스템 가동 시간
 };
 
-// 센서 데이터 구조체
+// 센서 데이터 구조체 (최적화)
 struct SensorData {
   float temperature;  // 온도
   float humidity;  // 습도
   long stepPosition;  // 현재 스텝 위치
-  int stepperSpeed;  // 스테핑 모터 속도 (RPM)
+  byte stepperSpeed;  // 스테핑 모터 속도 (int → byte)
   bool stepperRunning;  // 스테핑 모터 실행 여부
   unsigned long timestamp;  // 데이터 수집 시간
 };
@@ -62,8 +59,14 @@ struct SensorData {
 SensorData sensorData;  // 센서 데이터 구조체 인스턴스
 SystemStatus systemStatus;  // 시스템 상태 구조체 인스턴스
 
-// JSON 문서 생성
-JsonDocument doc;  // JSON 문서 객체 생성
+// JSON 문서 생성 (ArduinoJson v7 호환)
+JsonDocument doc;  // 최신 ArduinoJson 사용
+
+// 상수 문자열을 PROGMEM으로 이동
+const char MSG_READY[] PROGMEM = "Arduino Ready for Raspberry Pi Communication";
+const char MSG_DHT_STEPPER[] PROGMEM = "DHT11 Sensor and ULN2003 Stepper Motor Control Available";
+const char MSG_CAGE_CLEANING[] PROGMEM = "Bird Cage Toilet Cleaning System Enabled";
+const char MSG_EMERGENCY[] PROGMEM = "Emergency Stop System Active";
 
 // 함수 선언
 void readSensorData();  // 센서 데이터 읽기
@@ -82,6 +85,7 @@ void handleEmergencyStop();  // 긴급 정지 처리
 void playBuzzer(int frequency, int duration);  // 부저 소리
 void blinkStatusLED(int times);  // 상태 LED 깜빡임
 int freeMemory();  // 사용 가능한 메모리 반환
+void copyProgmemToBuffer(const char* progmemStr, char* buffer, size_t maxLen);  // PROGMEM 문자열 복사 함수
 
 void setup() {  // 설정
   // 시리얼 통신 초기화
@@ -120,17 +124,22 @@ void setup() {  // 설정
   systemStatus.cleaning_servo_active = false;
   systemStatus.cleaning_cycles = 0;
   systemStatus.last_cleaning = 0;
-  systemStatus.system_uptime = millis();
   
   // 시스템 시작 알림
   blinkStatusLED(3);  // 3번 깜빡임
   playBuzzer(1000, 200);  // 부저 소리
   
-  Serial.println("=== " + String(SYSTEM_NAME) + " v" + String(SYSTEM_VERSION) + " ===");
-  Serial.println("Arduino Ready for Raspberry Pi Communication");
-  Serial.println("DHT11 Sensor and ULN2003 Stepper Motor Control Available");
-  Serial.println("Bird Cage Toilet Cleaning System Enabled");
-  Serial.println("Emergency Stop System Active");
+  // PROGMEM 문자열 출력 (메모리 절약)
+  Serial.print(F("=== "));
+  Serial.print((__FlashStringHelper*)SYSTEM_NAME);
+  Serial.print(F(" v"));
+  Serial.print((__FlashStringHelper*)SYSTEM_VERSION);
+  Serial.println(F(" ==="));
+  
+  Serial.println((__FlashStringHelper*)MSG_READY);
+  Serial.println((__FlashStringHelper*)MSG_DHT_STEPPER);
+  Serial.println((__FlashStringHelper*)MSG_CAGE_CLEANING);
+  Serial.println((__FlashStringHelper*)MSG_EMERGENCY);
   
   // 초기 센서 확인
   readSensorData();
@@ -142,7 +151,7 @@ void loop() {  // 루프
     // 긴급 정지 상태에서는 센서 데이터만 전송
     static unsigned long lastEmergencyReport = 0;
     if (millis() - lastEmergencyReport > 5000) {  // 5초마다 긴급 정지 상태 보고
-      Serial.println("{\"alert\": \"EMERGENCY_STOP_ACTIVE\", \"message\": \"시스템이 긴급 정지 상태입니다.\"}");
+      Serial.println(F("{\"alert\":\"EMERGENCY_STOP_ACTIVE\",\"message\":\"Emergency stop active\"}"));
       lastEmergencyReport = millis();
     }
     delay(1000);
@@ -171,17 +180,20 @@ void loop() {  // 루프
     lastSendTime = millis();  // 마지막 전송 시간 업데이트
   }
   
-  // 시스템 상태 업데이트
-  systemStatus.system_uptime = millis();
-  
   delay(100);  // 100ms 대기
+}
+
+// PROGMEM 문자열을 버퍼로 복사하는 함수
+void copyProgmemToBuffer(const char* progmemStr, char* buffer, size_t maxLen) {
+  strncpy_P(buffer, progmemStr, maxLen - 1);
+  buffer[maxLen - 1] = '\0';
 }
 
 // 라즈베리파이로부터 받은 명령 처리
 void processCommand(const char* command) {  // 명령 처리
   // 긴급 정지 상태에서는 reset_emergency_stop 명령만 처리
-  if (systemStatus.emergency_stop && strstr(command, "reset_emergency_stop") == NULL) {
-    Serial.println("{\"error\": \"EMERGENCY_STOP_ACTIVE\", \"message\": \"긴급 정지 상태에서는 reset_emergency_stop 명령만 사용 가능합니다.\"}");
+  if (systemStatus.emergency_stop && strstr_P(command, PSTR("reset_emergency_stop")) == NULL) {
+    Serial.println(F("{\"error\":\"EMERGENCY_STOP_ACTIVE\"}"));
     return;
   }
   
@@ -189,75 +201,85 @@ void processCommand(const char* command) {  // 명령 처리
   DeserializationError error = deserializeJson(doc, command);
   
   if (error) {  // JSON 파싱 실패 시
-    Serial.println("{\"error\": \"JSON parsing failed\", \"details\": \"" + String(error.c_str()) + "\"}");
+    Serial.println(F("{\"error\":\"JSON parsing failed\"}"));
     return;  // 함수 종료
   }
   
   // 명령 타입 확인
   const char* cmdType = doc["command"];  // 명령 타입
   
-  if (strcmp(cmdType, "get_sensor_data") == 0) {  // 센서 데이터 요청 명령
+  if (strcmp_P(cmdType, PSTR("get_sensor_data")) == 0) {  // 센서 데이터 요청 명령
     readSensorData();  // 센서 데이터 읽기
     sendSensorData();  // 센서 데이터 전송
   }
-  else if (strcmp(cmdType, "set_led") == 0) {  // LED 상태 변경 명령
+  else if (strcmp_P(cmdType, PSTR("set_led")) == 0) {  // LED 상태 변경 명령
     int ledState = doc["state"];  // LED 상태 확인
     setLED(ledState);  // LED 상태 설정
-    Serial.println("{\"response\": \"LED state changed\", \"state\": " + String(ledState) + "}");
+    Serial.print(F("{\"response\":\"LED state changed\",\"state\":"));
+    Serial.print(ledState);
+    Serial.println(F("}"));
   }
-  else if (strcmp(cmdType, "move_stepper") == 0) {  // 스테핑 모터 이동 명령
-    int steps = doc["steps"];  // 이동할 스텝 수 (양수: 시계방향, 음수: 반시계방향)
+  else if (strcmp_P(cmdType, PSTR("move_stepper")) == 0) {  // 스테핑 모터 이동 명령
+    int steps = doc["steps"];  // 이동할 스텝 수
     int speed = doc["speed"];  // 속도 (RPM)
     moveStepper(steps, speed);  // 스테핑 모터 이동
-    Serial.println("{\"response\": \"Stepper moved\", \"steps\": " + String(steps) + ", \"speed\": " + String(speed) + "}");
+    Serial.print(F("{\"response\":\"Stepper moved\",\"steps\":"));
+    Serial.print(steps);
+    Serial.print(F(",\"speed\":"));
+    Serial.print(speed);
+    Serial.println(F("}"));
   }
-  else if (strcmp(cmdType, "set_stepper_speed") == 0) {  // 스테핑 모터 속도 설정 명령
+  else if (strcmp_P(cmdType, PSTR("set_stepper_speed")) == 0) {  // 스테핑 모터 속도 설정 명령
     int speed = doc["speed"];  // 속도 (RPM)
     setStepperSpeed(speed);  // 스테핑 모터 속도 설정
-    Serial.println("{\"response\": \"Stepper speed changed\", \"speed\": " + String(speed) + "}");
+    Serial.print(F("{\"response\":\"Stepper speed changed\",\"speed\":"));
+    Serial.print(speed);
+    Serial.println(F("}"));
   }
-  else if (strcmp(cmdType, "stop_stepper") == 0) {  // 스테핑 모터 정지 명령
+  else if (strcmp_P(cmdType, PSTR("stop_stepper")) == 0) {  // 스테핑 모터 정지 명령
     stopStepper();  // 스테핑 모터 정지
-    Serial.println("{\"response\": \"Stepper stopped\"}");
+    Serial.println(F("{\"response\":\"Stepper stopped\"}"));
   }
-  else if (strcmp(cmdType, "reset_stepper_position") == 0) {  // 스테핑 모터 위치 초기화 명령
+  else if (strcmp_P(cmdType, PSTR("reset_stepper_position")) == 0) {  // 스테핑 모터 위치 초기화 명령
     resetStepperPosition();  // 스테핑 모터 위치 초기화
-    Serial.println("{\"response\": \"Stepper position reset\"}");
+    Serial.println(F("{\"response\":\"Stepper position reset\"}"));
   }
-  else if (strcmp(cmdType, "disable_stepper") == 0) {  // 스테핑 모터 핀 비활성화 명령
+  else if (strcmp_P(cmdType, PSTR("disable_stepper")) == 0) {  // 스테핑 모터 핀 비활성화 명령
     disableStepperPins();  // 스테핑 모터 핀 비활성화
-    Serial.println("{\"response\": \"Stepper pins disabled\"}");
+    Serial.println(F("{\"response\":\"Stepper pins disabled\"}"));
   }
-  else if (strcmp(cmdType, "cage_cleaning") == 0) {  // 새장 화장실 청소 명령
+  else if (strcmp_P(cmdType, PSTR("cage_cleaning")) == 0) {  // 새장 화장실 청소 명령
     performCageCleaning();  // 새장 화장실 청소 수행
-    Serial.println("{\"response\": \"Cage cleaning completed\", \"cycles\": " + String(systemStatus.cleaning_cycles) + "}");
+    Serial.print(F("{\"response\":\"Cage cleaning completed\",\"cycles\":"));
+    Serial.print(systemStatus.cleaning_cycles);
+    Serial.println(F("}"));
   }
-  else if (strcmp(cmdType, "activate_cleaning_servo") == 0) {  // 청소 서보 작동 명령
+  else if (strcmp_P(cmdType, PSTR("activate_cleaning_servo")) == 0) {  // 청소 서보 작동 명령
     activateCleaningServo();
-    Serial.println("{\"response\": \"Cleaning servo activated\"}");
+    Serial.println(F("{\"response\":\"Cleaning servo activated\"}"));
   }
-  else if (strcmp(cmdType, "reset_emergency_stop") == 0) {  // 긴급 정지 해제 명령
+  else if (strcmp_P(cmdType, PSTR("reset_emergency_stop")) == 0) {  // 긴급 정지 해제 명령
     systemStatus.emergency_stop = false;
     digitalWrite(STATUS_LED_PIN, LOW);  // 상태 LED 끄기
-    Serial.println("{\"response\": \"Emergency stop reset\", \"status\": \"normal\"}");
+    Serial.println(F("{\"response\":\"Emergency stop reset\"}"));
   }
-  else if (strcmp(cmdType, "reset_cleaning_cycles") == 0) {  // 청소 횟수 초기화 명령
+  else if (strcmp_P(cmdType, PSTR("reset_cleaning_cycles")) == 0) {  // 청소 횟수 초기화 명령
     systemStatus.cleaning_cycles = 0;
-    Serial.println("{\"response\": \"Cleaning cycles reset\", \"cycles\": 0}");
+    Serial.println(F("{\"response\":\"Cleaning cycles reset\"}"));
   }
-  else if (strcmp(cmdType, "get_status") == 0) {  // 상태 정보 요청 명령
+  else if (strcmp_P(cmdType, PSTR("get_status")) == 0) {  // 상태 정보 요청 명령
     sendStatus();  // 상태 정보 전송
   }
-  else if (strcmp(cmdType, "system_test") == 0) {  // 시스템 테스트 명령
-    Serial.println("{\"response\": \"System test started\"}");
+  else if (strcmp_P(cmdType, PSTR("system_test")) == 0) {  // 시스템 테스트 명령
+    Serial.println(F("{\"response\":\"System test started\"}"));
     blinkStatusLED(2);
     playBuzzer(800, 100);
     delay(200);
     playBuzzer(1200, 100);
-    Serial.println("{\"response\": \"System test completed\"}");
+    Serial.println(F("{\"response\":\"System test completed\"}"));
   }
   else {  // 알 수 없는 명령
-    Serial.println("{\"error\": \"Unknown command\", \"received\": \"" + String(cmdType) + "\"}");
+    Serial.println(F("{\"error\":\"Unknown command\"}"));
   }
 }
 
@@ -282,52 +304,54 @@ void readSensorData() {  // 센서 데이터 읽기
   sensorData.timestamp = millis();  // 데이터 수집 시간 업데이트
 }
 
-// 센서 데이터 전송
+// 센서 데이터 전송 (간소화)
 void sendSensorData() {  // 센서 데이터 전송
-  // JSON으로 데이터 포맷팅
+  // JSON으로 데이터 포맷팅 (간소화)
   doc.clear();  
-  doc["type"] = "sensor_data";  // 데이터 타입
-  doc["temperature"] = sensorData.temperature;  // 온도
-  doc["humidity"] = sensorData.humidity;  // 습도
-  doc["step_position"] = sensorData.stepPosition;  // 스텝 위치
-  doc["stepper_speed"] = sensorData.stepperSpeed;  // 스테핑 모터 속도
-  doc["stepper_running"] = sensorData.stepperRunning;  // 스테핑 모터 실행 여부
-  doc["timestamp"] = sensorData.timestamp;  // 데이터 수집 시간
+  doc["type"] = "sensor_data";
+  doc["temp"] = sensorData.temperature;  // 키 이름 단축
+  doc["hum"] = sensorData.humidity;
+  doc["pos"] = sensorData.stepPosition;
+  doc["spd"] = sensorData.stepperSpeed;
+  doc["run"] = sensorData.stepperRunning;
+  doc["time"] = sensorData.timestamp;
   
   // JSON 전송
-  serializeJson(doc, Serial);  // JSON 전송
-  Serial.println();  // 줄 바꿈
+  serializeJson(doc, Serial);
+  Serial.println();
 }
 
-// 상태 정보 전송
+// 상태 정보 전송 (간소화)
 void sendStatus() {  // 상태 정보 전송
-  doc.clear();  // JSON 문서 초기화
-  doc["type"] = "status";  // 상태 타입
-  doc["system_name"] = SYSTEM_NAME;
-  doc["system_version"] = SYSTEM_VERSION;
-  doc["uptime"] = systemStatus.system_uptime;  // 실행 시간
-  doc["free_memory"] = freeMemory();  // 사용 가능한 메모리
-  doc["arduino_ready"] = true;  // Arduino 준비 상태 
-  doc["dht11_connected"] = (sensorData.temperature != -999 && sensorData.humidity != -999);  // DHT11 센서 연결 상태
-  doc["step_position"] = sensorData.stepPosition;  // 스텝 위치
-  doc["stepper_speed"] = sensorData.stepperSpeed;  // 스테핑 모터 속도
-  doc["stepper_running"] = sensorData.stepperRunning;  // 스테핑 모터 실행 여부
+  // 임시 버퍼 (PROGMEM 문자열용)
+  char tempBuffer[32];
   
-  // 새장 청소 시스템 상태
-  doc["emergency_stop"] = systemStatus.emergency_stop;
-  doc["cleaning_servo_active"] = systemStatus.cleaning_servo_active;
-  doc["cleaning_cycles"] = systemStatus.cleaning_cycles;
-  doc["last_cleaning"] = systemStatus.last_cleaning;
-  doc["max_cleaning_cycles"] = MAX_CLEANING_CYCLES;
+  doc.clear();
+  doc["type"] = "status";
   
-  serializeJson(doc, Serial);  // JSON 전송
-  Serial.println();  // 줄 바꿈
+  // PROGMEM 문자열을 버퍼로 복사해서 JSON에 할당
+  copyProgmemToBuffer(SYSTEM_VERSION, tempBuffer, sizeof(tempBuffer));
+  doc["ver"] = tempBuffer;
+  
+  doc["mem"] = freeMemory();
+  doc["ready"] = true;
+  doc["dht"] = (sensorData.temperature != -999 && sensorData.humidity != -999);
+  doc["pos"] = sensorData.stepPosition;
+  doc["spd"] = sensorData.stepperSpeed;
+  doc["run"] = sensorData.stepperRunning;
+  doc["estop"] = systemStatus.emergency_stop;
+  doc["servo"] = systemStatus.cleaning_servo_active;
+  doc["cycles"] = systemStatus.cleaning_cycles;
+  doc["last"] = systemStatus.last_cleaning;
+  doc["max"] = MAX_CLEANING_CYCLES;
+  
+  serializeJson(doc, Serial);
+  Serial.println();
 }
 
 // LED 제어 (핀 13 사용)
 void setLED(int state) {  // LED 제어
-  pinMode(13, OUTPUT);  // 핀 13 설정
-  digitalWrite(13, state);  // 핀 13 상태 설정
+  digitalWrite(STATUS_LED_PIN, state);  // 핀 13 상태 설정
 }
 
 // ULN2003 스테핑 모터 이동
@@ -375,35 +399,31 @@ void disableStepperPins() {  // 스테핑 모터 핀 비활성화
   digitalWrite(STEPPER_PIN4, LOW);  // IN4 핀 비활성화
 }
 
-// 새장 화장실 청소 수행
+// 새장 화장실 청소 수행 (간소화)
 void performCageCleaning() {
   // 청소 횟수 확인
   if (systemStatus.cleaning_cycles >= MAX_CLEANING_CYCLES) {
-    Serial.println("{\"alert\": \"MAX_CLEANING_CYCLES_REACHED\", \"message\": \"최대 청소 횟수에 도달했습니다.\"}");
+    Serial.println(F("{\"alert\":\"MAX_CLEANING_CYCLES_REACHED\"}"));
     return;
   }
   
-  Serial.println("{\"info\": \"Bird cage toilet cleaning started\"}");
+  Serial.println(F("{\"info\":\"Cage cleaning started\"}"));
   
   // 상태 LED 켜기
   digitalWrite(STATUS_LED_PIN, HIGH);
   
   // 1단계: 모래 밀어내기 (청소 서보 작동)
-  Serial.println("{\"info\": \"Step 1: Pushing sand with servo\"}");
   activateCleaningServo();
   
   // 2단계: 스테핑 모터로 똥 치우기 (앞으로 이동)
-  Serial.println("{\"info\": \"Step 2: Moving stepper to clean poop\"}");
   int cleaningSteps = STEPS_PER_REVOLUTION * 3;  // 3바퀴 회전
   moveStepper(cleaningSteps, 12);
   delay(1000);
   
   // 3단계: 원위치 복귀
-  Serial.println("{\"info\": \"Step 3: Returning to original position\"}");
   moveStepper(-cleaningSteps, 12);
   
   // 4단계: 추가 모래 정리
-  Serial.println("{\"info\": \"Step 4: Final sand cleanup\"}");
   activateCleaningServo();
   
   // 청소 완료 처리
@@ -416,18 +436,15 @@ void performCageCleaning() {
   // 완료 알림
   playBuzzer(1200, 300);
   
-  Serial.println("{\"info\": \"Bird cage toilet cleaning completed\", \"total_cycles\": " + String(systemStatus.cleaning_cycles) + "}");
+  Serial.println(F("{\"info\":\"Cage cleaning completed\"}"));
 }
 
-// 청소 서보 작동 (모래 밀어내기)
+// 청소 서보 작동 (모래 밀어내기) - 간소화
 void activateCleaningServo() {
   systemStatus.cleaning_servo_active = true;
   
-  // 서보 모터 PWM 신호 생성 (간단한 구현)
-  Serial.println("{\"info\": \"Cleaning servo activated for sand pushing\"}");
-  
   // 서보 모터 90도 회전 (모래 밀어내기)
-  for (int i = 0; i < 20; i++) {  // 약 2초간 PWM 신호 전송
+  for (byte i = 0; i < 20; i++) {  // int → byte
     digitalWrite(CLEANING_SERVO_PIN, HIGH);
     delayMicroseconds(1500);  // 90도 위치 PWM 신호
     digitalWrite(CLEANING_SERVO_PIN, LOW);
@@ -437,7 +454,7 @@ void activateCleaningServo() {
   delay(1000);  // 1초 대기
   
   // 서보 모터 0도 복귀
-  for (int i = 0; i < 20; i++) {  // 약 2초간 PWM 신호 전송
+  for (byte i = 0; i < 20; i++) {  // int → byte
     digitalWrite(CLEANING_SERVO_PIN, HIGH);
     delayMicroseconds(1000);  // 0도 위치 PWM 신호
     digitalWrite(CLEANING_SERVO_PIN, LOW);
@@ -445,7 +462,6 @@ void activateCleaningServo() {
   }
   
   systemStatus.cleaning_servo_active = false;
-  Serial.println("{\"info\": \"Cleaning servo deactivated\"}");
 }
 
 // 긴급 정지 처리 (인터럽트 함수)
@@ -461,8 +477,6 @@ void handleEmergencyStop() {
   
   systemStatus.cleaning_servo_active = false;
   sensorData.stepperRunning = false;
-  
-  Serial.println("{\"alert\": \"EMERGENCY_STOP_TRIGGERED\", \"message\": \"긴급 정지가 작동되었습니다.\"}");
 }
 
 // 부저 소리
