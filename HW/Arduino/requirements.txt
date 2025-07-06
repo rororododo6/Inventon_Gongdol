@@ -1,0 +1,30 @@
+# YOLOv11s 기반 새똥 탐지 및 자동 청소 시스템
+# 라즈베리파이 환경용 Python 패키지 목록
+
+# 시리얼 통신
+pyserial>=3.5
+
+# 컴퓨터 비전 및 객체 탐지
+ultralytics>=8.0.0
+opencv-python>=4.8.0
+numpy>=1.21.0
+Pillow>=8.3.0
+
+# 딥러닝 프레임워크 (YOLO 의존성)
+torch>=1.9.0
+torchvision>=0.10.0
+
+# 유틸리티
+matplotlib>=3.3.0
+pyyaml>=5.4.0
+
+# 라즈베리파이 카메라 모듈 (picamera2)
+# 시스템 패키지로 설치 필요:
+# sudo apt install python3-picamera2
+
+# 라즈베리파이 GPIO (선택사항)
+# RPi.GPIO>=0.7.0
+
+# PI 카메라 추가 의존성
+# libcamera-apps (시스템 레벨 설치 필요)
+# sudo apt install libcamera-apps 
