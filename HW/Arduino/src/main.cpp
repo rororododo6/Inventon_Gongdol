@@ -256,6 +256,7 @@ void handleEmergencyMode() {
   delay(1000);
 }
 
+// ========== 시리얼 입력 처리 ==========
 void handleSerialInput() {
   if (!Serial.available()) return;
   
@@ -271,6 +272,7 @@ void handleSerialInput() {
   }
 }
 
+// ========== 주기적 센서 데이터 전송 ==========
 void handlePeriodicSensorUpdate() {
   static unsigned long lastSendTime = 0;
   if (millis() - lastSendTime > SystemConfig::SENSOR_UPDATE_INTERVAL) {
@@ -289,6 +291,7 @@ void processCommand(const char* command) {
   executeCommand(cmdType);
 }
 
+// ========== 명령어 유효성 검사 ==========
 bool validateCommand(const char* command) {
   if (systemStatus.emergency_stop && strstr_P(command, PSTR("reset_emergency_stop")) == NULL) {
     sendError("EMERGENCY_STOP_ACTIVE");
@@ -297,6 +300,7 @@ bool validateCommand(const char* command) {
   return true;
 }
 
+// ========== 명령어 파싱 ==========
 bool parseCommand(const char* command) {
   DeserializationError error = deserializeJson(doc, command);
   if (error) {
@@ -306,6 +310,7 @@ bool parseCommand(const char* command) {
   return true;
 }
 
+// ========== 명령어 실행 ==========
 void executeCommand(const char* cmdType) {
   if (strcmp_P(cmdType, PSTR("get_sensor_data")) == 0) {
     handleSensorDataRequest();
@@ -344,12 +349,14 @@ void handleSensorDataRequest() {
   sendSensorData();
 }
 
+// ========== LED 제어 처리 ==========
 void handleLedControl() {
   bool ledState = doc["state"];
   setLED(ledState);
   sendResponse("LED state changed", ledState);
 }
 
+// ========== 스테핑 모터 이동 처리 ==========
 void handleStepperMove() {
   int steps = doc["steps"];
   int speed = doc["speed"];
@@ -363,6 +370,7 @@ void handleStepperMove() {
   Serial.println();
 }
 
+// ========== 스테핑 모터 속도 설정 처리 ==========
 void handleStepperSpeedSet() {
   int speed = doc["speed"];
   if (isValidSpeed(speed)) {
@@ -373,21 +381,25 @@ void handleStepperSpeedSet() {
   }
 }
 
+// ========== 스테핑 모터 정지 처리 ==========
 void handleStepperStop() {
   stopStepper();
   sendResponse("Stepper stopped");
 }
 
+// ========== 스테핑 모터 위치 초기화 처리 ==========
 void handleStepperReset() {
   resetStepperPosition();
   sendResponse("Stepper position reset");
 }
 
+// ========== 스테핑 모터 핀 비활성화 처리 ==========
 void handleStepperDisable() {
   disableStepperPins();
   sendResponse("Stepper pins disabled");
 }
 
+// ========== 새장 화장실 청소 처리 ==========
 void handleCageCleaning() {
   if (isCleaningLimitReached()) {
     Serial.println(F("{\"alert\":\"MAX_CLEANING_CYCLES_REACHED\"}"));
@@ -398,22 +410,26 @@ void handleCageCleaning() {
   sendResponse("Cage cleaning completed", systemStatus.cleaning_cycles);
 }
 
+// ========== 청소 서보 작동 처리 ==========
 void handleCleaningServo() {
   activateCleaningServo();
   sendResponse("Cleaning servo activated");
 }
 
+// ========== 긴급 정지 초기화 처리 ==========
 void handleEmergencyReset() {
   systemStatus.emergency_stop = false;
   setLED(false);
   sendResponse("Emergency stop reset");
 }
 
+// ========== 청소 횟수 초기화 처리 ==========
 void handleCleaningCyclesReset() {
   systemStatus.cleaning_cycles = 0;
   sendResponse("Cleaning cycles reset");
 }
 
+// ========== 시스템 테스트 처리 ==========
 void handleSystemTest() {
   sendResponse("System test started");
   blinkStatusLED(LEDConfig::TEST_BLINKS);
@@ -423,7 +439,7 @@ void handleSystemTest() {
   sendResponse("System test completed");
 }
 
-// ========== 센서 및 데이터 처리 ==========
+// ========== 센서 데이터 읽기 ==========
 void readSensorData() {
   float temp = dht.readTemperature();
   float hum = dht.readHumidity();
@@ -433,6 +449,7 @@ void readSensorData() {
   sensorData.timestamp = millis();
 }
 
+// ========== 센서 데이터 전송 ==========
 void sendSensorData() {
   doc.clear();
   doc["type"] = "sensor_data";
@@ -447,6 +464,7 @@ void sendSensorData() {
   Serial.println();
 }
 
+// ========== 상태 정보 전송 ==========
 void sendStatus() {
   char tempBuffer[32];
   
@@ -472,6 +490,7 @@ void sendStatus() {
   Serial.println();
 }
 
+// ========== 응답 전송 ==========
 void sendResponse(const char* message, int value) {
   Serial.print(F("{\"response\":\""));
   Serial.print(message);
@@ -482,6 +501,7 @@ void sendResponse(const char* message, int value) {
   Serial.println(F("\"}"));
 }
 
+// ========== 에러 메시지 전송 ==========
 void sendError(const char* error) {
   Serial.print(F("{\"error\":\""));
   Serial.print(error);
@@ -493,6 +513,7 @@ void setLED(bool state) {
   digitalWrite(STATUS_LED_PIN, state ? HIGH : LOW);
 }
 
+// ========== 스테핑 모터 이동 ==========
 void moveStepper(int steps, int speed) {
   if (speed > 0) {
     setStepperSpeed(speed);
@@ -506,21 +527,25 @@ void moveStepper(int steps, int speed) {
   disableStepperPins();
 }
 
+// ========== 스테핑 모터 정지 ==========
 void stopStepper() {
   sensorData.stepperRunning = false;
   disableStepperPins();
 }
 
+// ========== 스테핑 모터 속도 설정 ==========
 void setStepperSpeed(int speed) {
   speed = constrain(speed, StepperConfig::MIN_SPEED, StepperConfig::MAX_SPEED);
   stepper.setSpeed(speed);
   sensorData.stepperSpeed = (byte)speed;
 }
 
+// ========== 스테핑 모터 위치 초기화 ==========
 void resetStepperPosition() {
   sensorData.stepPosition = 0;
 }
 
+// ========== 스테핑 모터 핀 비활성화 ==========
 void disableStepperPins() {
   digitalWrite(STEPPER_PIN1, LOW);
   digitalWrite(STEPPER_PIN2, LOW);
@@ -528,6 +553,7 @@ void disableStepperPins() {
   digitalWrite(STEPPER_PIN4, LOW);
 }
 
+// ========== 새장 화장실 청소 처리 ==========
 void performCageCleaning() {
   Serial.println(F("{\"info\":\"Cage cleaning started\"}"));
   
@@ -556,6 +582,7 @@ void performCageCleaning() {
   Serial.println(F("{\"info\":\"Cage cleaning completed\"}"));
 }
 
+// ========== 청소 서보 작동 처리 ==========
 void activateCleaningServo() {
   systemStatus.cleaning_servo_active = true;
   
@@ -580,12 +607,14 @@ void activateCleaningServo() {
   systemStatus.cleaning_servo_active = false;
 }
 
+// ========== 부저 작동 처리 ==========
 void playBuzzer(int frequency, int duration) {
   tone(BUZZER_PIN, frequency, duration);
   delay(duration);
   noTone(BUZZER_PIN);
 }
 
+// ========== 상태 LED 깜빡임 ==========
 void blinkStatusLED(byte times) {
   for (byte i = 0; i < times; i++) {
     setLED(true);
@@ -595,7 +624,7 @@ void blinkStatusLED(byte times) {
   }
 }
 
-// ========== 유틸리티 함수들 ==========
+// ========== 긴급 정지 처리 ==========
 void handleEmergencyStop() {
   systemStatus.emergency_stop = true;
   
@@ -608,21 +637,25 @@ void handleEmergencyStop() {
   sensorData.stepperRunning = false;
 }
 
+// ========== 메모리 사용량 체크 ==========
 int freeMemory() {
   extern int __heap_start, *__brkval;
   int v;
   return (int) &v - (__brkval == 0 ? (int) &__heap_start : (int) __brkval);
 }
 
+// ========== PROGMEM 문자열 복사 ==========
 void copyProgmemToBuffer(const char* progmemStr, char* buffer, size_t maxLen) {
   strncpy_P(buffer, progmemStr, maxLen - 1);
   buffer[maxLen - 1] = '\0';
 }
 
+// ========== 속도 유효성 검사 ==========
 bool isValidSpeed(int speed) {
   return speed >= StepperConfig::MIN_SPEED && speed <= StepperConfig::MAX_SPEED;
 }
 
+// ========== 청소 횟수 제한 체크 ==========
 bool isCleaningLimitReached() {
   return systemStatus.cleaning_cycles >= SystemConfig::MAX_CLEANING_CYCLES;
 }
