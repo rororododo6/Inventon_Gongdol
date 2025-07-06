@@ -1,8 +1,8 @@
 {
 	"folders": [
 		{
-			"name": "HW",
-			"path": ".."
+			"name": "Arduino",
+			"path": "."
 		}
 	],
 	"settings": {}
