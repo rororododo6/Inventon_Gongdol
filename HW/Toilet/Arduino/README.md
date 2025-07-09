@@ -1,389 +1,363 @@
-# YOLOv11s 기반 새똥 탐지 및 자동 청소 시스템 🐦🧹
+# 🐦 새장 화장실 자동 청소 시스템 - Arduino 펌웨어
 
-라즈베리파이에서 YOLOv11s 모델을 사용하여 새똥을 실시간으로 탐지하고, 아두이노 ULN2003 스테핑 모터를 제어하여 자동 청소를 수행하는 지능형 시스템입니다.
+**Arduino Uno 기반 하드웨어 제어 펌웨어 v1.3.1**
+
+라즈베리파이와 시리얼 통신으로 연동하여 새똥 청소를 위한 하드웨어를 제어하는 Arduino 펌웨어입니다.
 
 ## 🎯 주요 기능
 
-- **실시간 새똥 탐지**: YOLOv11s 딥러닝 모델 기반
-- **자동 청소 시스템**: 화면 커버리지 50% 도달 시 자동 작동
-- **정밀한 모터 제어**: ULN2003 + 28BYJ-48 스테핑 모터 (5바퀴 앞으로 + 원위치 복귀)
-- **지능형 카운터 관리**: 10회 청소 후 알림, 2회 추가 후 정지
-- **실시간 환경 모니터링**: DHT11 온습도 센서 데이터 지속 출력
-- **상태 관리**: 정상/알림/정지 3단계 상태
+- **🌡️ 환경 모니터링**: DHT11 온습도 센서 실시간 데이터 수집
+- **🔄 정밀 모터 제어**: ULN2003 + 28BYJ-48 스테핑 모터 제어
+- **🧹 자동 청소 시스템**: 3단계 청소 프로세스 (서보모터 + 스테핑모터)
+- **🚨 안전 시스템**: 긴급 정지 버튼, 상태 LED, 알림 부저
+- **📡 실시간 통신**: 라즈베리파이와 115200 baud 시리얼 통신
+- **🔧 완전한 제어**: JSON 기반 명령어 시스템
 
 ## 📂 프로젝트 구조
 
 ```
 Arduino/
-├── 라즈베리파이/              # 🆕 라즈베리파이 전용 폴더
-│   ├── main.py                # 메인 런처 (시작점)
-│   ├── pi_camera_client.py    # PI 카메라 클라이언트 (권장)
-│   ├── gpio_uart_client.py    # GPIO UART 클라이언트
-│   ├── demo_test.py          # 테스트 데모
-│   └── README.md             # 라즈베리파이 전용 문서
-├── src/                      # Arduino 소스 코드
-│   └── main.cpp
-├── include/                  # Arduino 헤더 파일
-│   └── functions.h
-├── platformio.ini           # Arduino 프로젝트 설정
-├── requirements.txt         # Python 패키지 목록
-├── README.md               # 이 파일
-└── HARDWARE_CONNECTION.md  # 하드웨어 연결 가이드
+├── src/                     # 📁 소스 코드
+│   └── main.cpp            # 🎯 메인 Arduino 펌웨어
+├── include/                # 📁 헤더 파일
+│   ├── README             # 헤더 폴더 설명
+│   └── functions.h        # 🔧 함수 선언
+├── lib/                   # 📁 라이브러리 폴더
+├── platformio.ini         # ⚙️ PlatformIO 프로젝트 설정
+├── requirements.txt       # 🐍 Python 요구사항 (라즈베리파이용)
+├── HARDWARE_CONNECTION.md # 🔌 하드웨어 연결 가이드
+└── README.md             # 📖 이 파일
 ```
 
-## 🛠️ 시스템 구성
+## 🔌 하드웨어 구성
 
-### 하드웨어
-- **라즈베리파이 4**: 메인 제어 보드 (카메라 + AI 처리)
-- **Arduino Uno**: 센서/모터 제어 보드
-- **라즈베리파이 카메라 모듈**: 실시간 영상 획득
-- **DHT11 센서**: 온습도 측정
-- **28BYJ-48 스테핑 모터**: 청소 메커니즘
-- **ULN2003 드라이버**: 스테핑 모터 제어
+### Arduino 핀 배치
+| 핀 번호 | 연결 부품 | 기능 |
+|---------|-----------|------|
+| **2** | DHT11 센서 | 온습도 측정 |
+| **3** | 긴급 정지 버튼 | 안전 정지 (인터럽트) |
+| **5** | ULN2003 IN1 | 스테핑 모터 제어 |
+| **6** | ULN2003 IN2 | 스테핑 모터 제어 |
+| **7** | ULN2003 IN3 | 스테핑 모터 제어 |
+| **8** | ULN2003 IN4 | 스테핑 모터 제어 |
+| **9** | SG90 서보모터 | 모래 밀어내기 |
+| **11** | 부저 | 상태 알림음 |
+| **13** | 상태 LED | 시스템 상태 표시 |
 
-### 소프트웨어
-- **YOLOv11s**: 객체 탐지 모델
-- **OpenCV**: 영상 처리
-- **PySerial**: 시리얼 통신
-- **Arduino C++**: 펌웨어
+### 필수 부품 리스트
+- **Arduino Uno** (메인 제어 보드)
+- **DHT11 온습도 센서**
+- **28BYJ-48 스테핑 모터 + ULN2003 드라이버 보드**
+- **SG90 서보모터** (청소용)
+- **긴급 정지 푸시 버튼**
+- **5mm LED** (상태 표시용)
+- **부저** (알림음용)
+- **점퍼 와이어 및 브레드보드**
 
-## 📦 설치 방법
+## 🚀 설치 및 업로드
 
-### 1. 라즈베리파이 설정
-
+### 1. PlatformIO 설치 (권장)
 ```bash
-# 시스템 업데이트
-sudo apt update && sudo apt upgrade -y
-
-# Python 및 pip 설치
-sudo apt install python3-pip python3-venv -y
-
-# 가상환경 생성 및 활성화
-python3 -m venv yolo_env
-source yolo_env/bin/activate
-
-# 프로젝트 클론 및 이동
-cd /path/to/your/project
-
-# 패키지 설치
-pip install -r requirements.txt
-
-# PI 카메라 모듈 설치
-sudo apt install python3-picamera2 libcamera-apps
-```
-
-### 2. PI 카메라 활성화
-
-```bash
-# 라즈베리파이 설정에서 카메라 활성화
-sudo raspi-config
-# 3 Interface Options → I1 Camera → Yes
-
-# 시스템 재부팅
-sudo reboot
-
-# 카메라 테스트
-libcamera-hello
-```
-
-### 3. 아두이노 설정
-
-```bash
-# PlatformIO 설치 (Arduino IDE 대신 권장)
+# PlatformIO CLI 설치
 pip install platformio
 
-# 프로젝트 빌드 및 업로드 (프로젝트 루트에서)
-platformio run --target upload
+# 또는 VS Code에서 PlatformIO IDE 확장 설치
 ```
 
-## 🔌 하드웨어 연결
+### 2. 라이브러리 의존성
+`platformio.ini`에서 자동 설치됩니다:
+- **ArduinoJson** v7.0.0: JSON 통신
+- **AccelStepper** v1.64: 스테핑 모터 제어
+- **Servo** v1.2.1: 서보모터 제어  
+- **DHT sensor library** v1.4.4: 온습도 센서
+- **Stepper** v1.1.3: 기본 스테핑 모터
 
-### 아두이노 - DHT11 센서
-```
-DHT11    Arduino Uno
-VCC   -> 5V
-DATA  -> Digital Pin 2
-GND   -> GND
-```
-
-### 아두이노 - ULN2003 + 28BYJ-48
-```
-ULN2003 모듈    Arduino Uno
-IN1          -> Digital Pin 5
-IN2          -> Digital Pin 6
-IN3          -> Digital Pin 7
-IN4          -> Digital Pin 8
-VCC (5V)     -> 5V
-GND          -> GND
-
-28BYJ-48 모터 -> ULN2003 모듈 소켓
-```
-
-### 라즈베리파이 - Arduino
-```
-라즈베리파이 USB -> Arduino USB (시리얼 통신)
-```
-
-### 라즈베리파이 - PI 카메라
-```
-PI 카메라 모듈 -> 라즈베리파이 CSI 포트 (Camera Serial Interface)
-```
-
-## 🚀 실행 방법
-
-### 1. 아두이노 펌웨어 업로드
+### 3. 펌웨어 업로드
 ```bash
-# 프로젝트 루트에서
+# 프로젝트 빌드 및 업로드
 platformio run --target upload
+
+# 시리얼 모니터 실행
+platformio device monitor
+
+# 또는 Arduino IDE 사용
+# File → Open → Arduino 폴더 선택
+# Tools → Board → Arduino Uno
+# Sketch → Upload
 ```
 
-### 2. 라즈베리파이 시스템 실행
-```bash
-# 가상환경 활성화
-source yolo_env/bin/activate
+## 🎮 청소 시스템 동작
 
-# 라즈베리파이 폴더로 이동
-cd 라즈베리파이/
+### 3단계 청소 프로세스
+```
+1️⃣ 서보모터 작동 (모래 밀어내기)
+   ├── 0° → 90° → 0° (20회 반복)
+   └── 소요시간: 약 20초
 
-# 메인 런처 실행 (권장)
-python3 main.py
+2️⃣ 대기 시간 (안정화)
+   └── 1초 대기
 
-# 또는 직접 실행
-python3 pi_camera_client.py    # PI 카메라 시스템 실행 (권장)
-python3 gpio_uart_client.py    # GPIO UART 시스템 실행
-python3 demo_test.py           # 데모 테스트
+3️⃣ 스테핑 모터 작동 (똥 치우기)
+   ├── 앞으로 3바퀴 회전 (6144 스텝)
+   ├── 1초 대기
+   └── 원위치 복귀 (-6144 스텝)
 ```
 
-## 🎮 사용법
+### 시스템 상태 관리
+- **정상 상태**: 청소 명령 수행 가능
+- **긴급 정지**: 모든 모터 즉시 정지
+- **청소 카운터**: 최대 100회 청소 제한
+- **에러 처리**: 센서 오류 시 기본값 반환
 
-### 카메라 창 제어
-- **q**: 시스템 종료
-- **r**: 시스템 리셋 (쓰레기통 비운 후)
-- **s**: 현재 상태 출력
+## 📡 통신 프로토콜
 
-### 시스템 워크플로우
+### 시리얼 통신 설정
+- **Baud Rate**: 115200
+- **Data Bits**: 8
+- **Stop Bits**: 1
+- **Parity**: None
+- **Buffer Size**: 512 bytes
 
-1. **정상 작동 모드**
-   - 새똥 탐지 → 화면 50% 커버리지 → 자동 청소
-   - 청소 동작: 앞으로 5바퀴 → 원위치 복귀
-   - 청소 횟수 카운트: 0/10
-
-2. **알림 모드 (10회 청소 후)**
-   - 🚨 "쓰레기통을 비워주세요!" 알림
-   - 추가 2회 청소 가능
-   - 청소 횟수 카운트: 10+2/10
-
-3. **정지 모드 (12회 청소 후)**
-   - ⛔ 시스템 작동 중지
-   - 'r' 키로 리셋 필요
-   - 청소 횟수 카운트: 0/10으로 초기화
-
-### 온습도 모니터링
-- 3초 간격으로 자동 업데이트
-- 화면 및 콘솔에 실시간 표시
-- 센서 오류 시 "센서 오류" 표시
-
-## 📊 시스템 상태 정보
-
-### 화면 표시 정보
-- **State**: 현재 시스템 상태
-- **Clean**: 청소 횟수 (현재/최대)
-- **Coverage**: 새똥 탐지 커버리지 비율
-- **Temp**: 현재 온도 (°C)
-- **Humidity**: 현재 습도 (%)
-
-### 콘솔 출력 정보
-```
-[14:23:45] === 시스템 상태 ===
-상태: 정상 작동
-청소 횟수: 5/10
-새똥 탐지 커버리지: 65.3%
-🌡️  온도: 23.5°C
-💧 습도: 58%
+### JSON 명령어 형식
+```json
+{
+  "command": "명령어_타입",
+  "value": 매개변수_값
+}
 ```
 
-## ⚙️ 설정 변경
+### 지원 명령어 목록
 
-### `raspberry_pi_client.py` 주요 설정값
+#### 🌡️ 센서 데이터
+```json
+// 온습도 데이터 요청
+{"command": "get_sensor_data"}
 
-```python
-# 청소 설정
-self.max_clean_count = 10        # 최대 청소 횟수
-self.max_warning_extra = 2       # 알림 후 추가 청소 횟수
-self.cleaning_revolutions = 5    # 청소 시 회전 수 (바퀴)
-self.cleaning_speed = 12         # 모터 속도 (RPM)
-
-# 탐지 설정
-self.target_coverage = 0.5       # 탐지 임계값 (50%)
-self.confidence = 0.5            # YOLO 신뢰도
-
-# 센서 설정
-self.sensor_update_interval = 3  # 센서 업데이트 간격 (초)
+// 응답 예시
+{
+  "temperature": 23.5,
+  "humidity": 58.0,
+  "stepPosition": 0,
+  "stepperSpeed": 10,
+  "stepperRunning": false,
+  "timestamp": 12345678
+}
 ```
 
-## 🔧 문제 해결
+#### 💡 LED 제어
+```json
+{"command": "led_on"}     // LED 켜기
+{"command": "led_off"}    // LED 끄기
+```
+
+#### 🔄 스테핑 모터 제어
+```json
+{"command": "stepper_move", "value": 2048}    // 2048스텝 이동
+{"command": "stepper_speed", "value": 15}     // 속도 15 RPM 설정
+{"command": "stepper_stop"}                   // 모터 정지
+{"command": "stepper_reset"}                  // 위치 초기화
+{"command": "stepper_disable"}                // 모터 비활성화
+```
+
+#### 🧹 청소 시스템
+```json
+{"command": "cage_cleaning"}        // 전체 청소 프로세스 실행
+{"command": "cleaning_servo"}       // 서보모터만 작동
+{"command": "reset_cleaning_cycles"} // 청소 횟수 초기화
+```
+
+#### 🚨 안전 시스템
+```json
+{"command": "emergency_reset"}      // 긴급 정지 해제
+{"command": "system_test"}          // 하드웨어 테스트
+```
+
+### 상태 메시지
+```json
+// 시스템 상태 정보
+{
+  "status": "ready",
+  "emergency_stop": false,
+  "cleaning_cycles": 5,
+  "cleaning_servo_active": false,
+  "last_cleaning": 1234567890,
+  "free_memory": 1234
+}
+```
+
+## 🔧 설정 및 튜닝
+
+### 모터 설정 상수
+```cpp
+// 스테핑 모터 설정
+const byte DEFAULT_SPEED = 10;        // 기본 속도 (RPM)
+const byte CLEANING_SPEED = 12;       // 청소 속도 (RPM)
+const int CLEANING_ROTATIONS = 3;     // 청소 시 회전 수
+const int CLEANING_DELAY = 1000;      // 청소 단계 간 대기
+
+// 서보모터 설정
+const int SERVO_90_PULSE = 1500;      // 90도 PWM 신호
+const int SERVO_0_PULSE = 1000;       // 0도 PWM 신호
+const byte SERVO_REPEAT_COUNT = 20;   // 반복 횟수
+const int SERVO_HOLD_TIME = 1000;     // 위치 유지 시간
+```
+
+### 센서 설정
+```cpp
+const unsigned long SENSOR_UPDATE_INTERVAL = 3000;  // 3초마다 자동 전송
+const unsigned long EMERGENCY_REPORT_INTERVAL = 5000; // 긴급 상태 5초마다 보고
+```
+
+## 🎵 부저 및 LED 신호
+
+### 시작 신호
+- **LED**: 3회 깜빡임
+- **부저**: 1000Hz, 200ms
+
+### 청소 완료 신호
+- **부저**: 1200Hz, 300ms
+
+### 시스템 테스트 신호
+- **LED**: 2회 깜빡임
+- **부저**: 800Hz → 1200Hz (각 100ms)
+
+## 🔍 문제 해결
 
 ### 일반적인 문제
 
-1. **카메라 인식 실패**
-   ```bash
-   # 카메라 장치 확인
-   ls /dev/video*
-   
-   # 권한 설정
-   sudo usermod -a -G video $USER
-   ```
-
-2. **아두이노 연결 실패**
-   ```bash
-   # 시리얼 포트 확인
-   ls /dev/ttyUSB* /dev/ttyACM*
-   
-   # 권한 설정
-   sudo usermod -a -G dialout $USER
-   ```
-
-3. **YOLO 모델 다운로드 실패**
-   ```bash
-   # 수동 다운로드
-   wget https://github.com/ultralytics/assets/releases/download/v0.0.0/yolov11n.pt
-   ```
-
-4. **메모리 부족 (라즈베리파이)**
-   ```bash
-   # 스왑 메모리 증가
-   sudo dphys-swapfile swapoff
-   sudo nano /etc/dphys-swapfile  # CONF_SWAPSIZE=2048
-   sudo dphys-swapfile setup
-   sudo dphys-swapfile swapon
-   ```
-
-### 성능 최적화
-
-1. **GPU 가속 (라즈베리파이 4)**
-   ```bash
-   # GPU 메모리 할당
-   sudo raspi-config
-   # Advanced Options > Memory Split > 128
-   ```
-
-2. **CPU 성능 모드**
-   ```bash
-   # 성능 모드 설정
-   echo performance | sudo tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor
-   ```
-
-## 📈 시스템 모니터링
-
-### 실시간 로그 확인
+#### 1. 업로드 실패
 ```bash
-# 시스템 리소스 모니터링
-htop
+# 포트 확인
+ls /dev/ttyUSB* /dev/ttyACM*
 
-# 온도 모니터링
-vcgencmd measure_temp
+# 권한 설정
+sudo usermod -a -G dialout $USER
+
+# 다른 프로그램에서 포트 사용 중이면 종료
+sudo lsof | grep ttyUSB
 ```
 
-### 디버그 모드 실행
-```python
-# 디버그 정보 활성화
-import logging
-logging.basicConfig(level=logging.DEBUG)
+#### 2. 시리얼 통신 안됨
+```cpp
+// 시리얼 모니터에서 확인
+Arduino Ready for Raspberry Pi Communication
+DHT11 Sensor and ULN2003 Stepper Motor Control Available
+Bird Cage Toilet Cleaning System Enabled
+Emergency Stop System Active
 ```
+
+#### 3. DHT11 센서 오류
+- 연결 확인: VCC(5V), DATA(2번핀), GND
+- 센서 교체 고려
+- 에러 시 기본값(-999) 반환
+
+#### 4. 스테핑 모터 작동 안됨
+- ULN2003 전원 연결 확인 (5V)
+- 핀 연결 확인: IN1(5), IN2(6), IN3(7), IN4(8)
+- 모터와 드라이버 연결 확인
+
+#### 5. 서보모터 작동 안됨  
+- 전원 확인 (5V)
+- 신호선 연결 확인 (9번 핀)
+- PWM 신호 확인
+
+### 디버깅 방법
+
+#### 시리얼 모니터 활용
+```bash
+# PlatformIO 시리얼 모니터
+platformio device monitor
+
+# 또는 screen 사용
+screen /dev/ttyUSB0 115200
+```
+
+#### 메모리 사용량 확인
+```json
+{"command": "get_sensor_data"}
+// 응답에서 free_memory 값 확인
+```
+
+#### 시스템 테스트
+```json
+{"command": "system_test"}
+// LED 깜빡임과 부저음으로 하드웨어 상태 확인
+```
+
+## 📊 성능 정보
+
+### 메모리 사용량
+- **프로그램 메모리**: ~15KB / 32KB
+- **SRAM**: ~1.2KB / 2KB  
+- **여유 SRAM**: ~800 bytes
+
+### 응답 시간
+- **센서 데이터**: ~10ms
+- **LED 제어**: ~1ms
+- **스테핑 모터**: ~5ms (명령 수신)
+- **전체 청소**: ~45초
+
+### 전력 소비
+- **대기 상태**: ~150mA
+- **청소 중**: ~600mA (스테핑 모터 작동 시)
 
 ## 🔄 업데이트 및 유지보수
 
 ### 정기 점검 사항
 1. **하드웨어 연결 상태** (주 1회)
-2. **센서 정확도 검증** (월 1회)
+2. **센서 정확도 확인** (월 1회)  
 3. **모터 동작 점검** (월 1회)
-4. **시스템 로그 확인** (월 1회)
+4. **긴급 정지 버튼 테스트** (월 1회)
 
-### 업데이트 방법
+### 펌웨어 업데이트
 ```bash
-# 패키지 업데이트
-pip install --upgrade ultralytics opencv-python
+# 최신 코드 받기
+git pull origin main
 
-# 시스템 업데이트
-sudo apt update && sudo apt upgrade
+# 빌드 및 업로드
+platformio run --target upload
 ```
 
-## 📞 지원 및 문의
+### 백업 및 복원
+```bash
+# 설정 백업
+cp platformio.ini platformio.ini.backup
 
-시스템 관련 문의사항이나 개선 제안이 있으시면 언제든지 연락해주세요.
+# 펌웨어 백업 (hex 파일)
+cp .pio/build/uno/firmware.hex firmware_backup.hex
+```
+
+## 🔗 관련 문서
+
+- **하드웨어 연결**: `HARDWARE_CONNECTION.md`
+- **라즈베리파이 코드**: `../Raspberrypi/`
+- **전체 시스템**: `../README.md`
+- **PlatformIO 문서**: https://docs.platformio.org/
+
+## 🆕 버전 정보
+
+### v1.3.1 (현재) - Bird Cage Toilet Cleaning System
+- 새장 화장실 청소 시스템으로 완전 전환
+- 3단계 청소 프로세스 구현
+- JSON 기반 통신 프로토콜 안정화
+- 긴급 정지 시스템 강화
+- 메모리 최적화 및 성능 개선
+
+### v1.2.0  
+- YOLOv11s 연동 최적화
+- 스테핑 모터 정밀도 향상
+- DHT11 센서 안정성 개선
+
+### v1.1.0
+- 기본 청소 시스템 구현
+- 시리얼 통신 프로토콜 확립
 
 ---
-**🎉 YOLOv11s 기반 지능형 새똥 청소 시스템으로 깨끗한 환경을 유지하세요!** 
 
-## 🔌 GPIO UART 통신 설정
+**🎉 Arduino 기반 스마트 새장 화장실 청소 시스템으로 자동화된 환경을 만나보세요!** 
 
-### 📍 라즈베리파이 GPIO UART 핀
-```
-GPIO 14 (Pin 8)  - TXD (송신)
-GPIO 15 (Pin 10) - RXD (수신)
-GND (Pin 6)      - 그라운드
-```
+## 📞 기술 지원
 
-### 🔧 하드웨어 연결 방법
+Arduino 펌웨어 관련 문의사항이나 하드웨어 연결 문제가 있으시면 언제든지 연락해주세요.
 
-#### 🔌 라즈베리파이 ↔ Arduino 직접 연결
-```
-라즈베리파이      Arduino Uno
-┌─────────────┐   ┌─────────────┐
-│GPIO 14 (TXD)│──→│  RX (Pin 0) │
-│GPIO 15 (RXD)│←──│  TX (Pin 1) │
-│    GND      │───│     GND     │
-└─────────────┘   └─────────────┘
-```
-
-**⚠️ 주의: 전압 레벨 차이**
-- 라즈베리파이: 3.3V
-- Arduino: 5V
-- **전압 분배기 또는 레벨 컨버터 필요**
-
-### 🔧 안전한 연결 방법
-
-#### 1️⃣ 전압 분배기 사용
-```
-Arduino TX (5V) ──┬── 1kΩ ──┬── 라즈베리파이 RX (3.3V)
-                  │         │
-                  └─ 2kΩ ───┴── GND
-```
-
-#### 2️⃣ 레벨 컨버터 사용 (권장)
-```
-라즈베리파이 ↔ 레벨 컨버터 ↔ Arduino
-  (3.3V)         (3.3V↔5V)      (5V)
-```
-
-## ⚙️ 라즈베리파이 설정
-
-### 1️⃣ UART 활성화
-```bash
-# Raspberry Pi 설정 도구 실행
-sudo raspi-config
-
-# 3 Interface Options
-# P6 Serial Port
-# Would you like a login shell to be accessible over serial? → No
-# Would you like the serial port hardware to be enabled? → Yes
-```
-
-### 2️⃣ 부팅 설정 수정
-```bash
-# config.txt 편집
-sudo nano /boot/config.txt
-
-# 다음 줄 추가 또는 수정
-enable_uart=1
-dtoverlay=disable-bt
-```
-
-### 3️⃣ 시스템 재부팅
-```bash
-sudo reboot
-```
-
-## 🐍 Python 코드 수정
-
-현재 코드를 GPIO UART 통신으로 수정하겠습니다: 
+**💡 팁**: 라즈베리파이와의 연동은 `../Raspberrypi/clean_ver/` 폴더의 최신 클라이언트를 사용하세요! 

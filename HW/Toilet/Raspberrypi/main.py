@@ -8,6 +8,7 @@ import sys
 import os
 import subprocess
 import logging
+from typing import Optional
 
 # 로깅 설정
 logging.basicConfig(
@@ -19,7 +20,7 @@ logger = logging.getLogger(__name__)
 def display_menu():
     """메뉴 표시"""
     print("\n" + "="*60)
-    print("🎯 PI 카메라 자동 청소 시스템")
+    print("🎯 PI 카메라 커스텀 새똥 탐지 시스템")
     print("="*60)
     print("1. PI 카메라 클라이언트 실행")
     print("2. 종료")
@@ -28,7 +29,7 @@ def display_menu():
     print("   더 안정적이고 확장 가능한 버전이 준비되어 있습니다.")
     print("="*60)
 
-def run_script(script_name: str, description: str) -> None:
+def run_script(script_name: str, description: str, model_path: Optional[str] = None, confidence: Optional[float] = None, resolution: Optional[str] = None) -> None:
     """스크립트 실행"""
     print(f"\n🚀 {description} 시작...")
     
@@ -38,9 +39,22 @@ def run_script(script_name: str, description: str) -> None:
             print(f"❌ {script_name} 파일을 찾을 수 없습니다.")
             return
         
-        # 스크립트 실행
+        # 명령어 구성
+        cmd = ["/usr/bin/python3", script_name]
+        
+        # 선택적 매개변수 추가
+        if model_path:
+            cmd.extend(["--model", model_path])
+        if confidence is not None:
+            cmd.extend(["--confidence", str(confidence)])
+        if resolution:
+            cmd.extend(["--resolution", resolution])
+        
+        print(f"🔧 실행 명령어: {' '.join(cmd)}")
+        
+        # 스크립트 실행 (시스템 Python 사용)
         result = subprocess.run(
-            [sys.executable, script_name],
+            cmd,
             check=True,
             capture_output=False
         )
@@ -82,7 +96,13 @@ def main():
             choice_num = int(choice)
             
             if choice_num == 1:
-                run_script("pi_camera_client.py", "PI 카메라 클라이언트")
+                # 커스텀 새똥 특화 모델 사용
+                model_path = "../AI/detect/train63/weights/best.pt"  # 새똥 특화 훈련 모델
+                confidence = 0.3  # 새똥 탐지에 최적화된 신뢰도
+                resolution = "640x480"  # 표준 해상도
+                
+                run_script("pi_camera_client.py", "PI 카메라 클라이언트", 
+                          model_path=model_path, confidence=confidence, resolution=resolution)
                 
             elif choice_num == 2:
                 print("\n👋 시스템을 종료합니다.")

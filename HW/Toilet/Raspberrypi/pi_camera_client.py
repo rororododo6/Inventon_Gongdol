@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-PI 카메라 기반 YOLOv11s 새똥 탐지 및 자동 청소 시스템
-라즈베리파이 카메라 모듈 + GPIO UART 통신
+PI 카메라 기반 커스텀 새똥 탐지 및 자동 청소 시스템
+라즈베리파이 카메라 모듈 + 새똥 특화 훈련 모델 + GPIO UART 통신
 """
 
 try:
@@ -44,13 +44,13 @@ class SystemState(Enum):
     STOPPED = "정지 상태"
 
 class BirdPoopDetector:
-    def __init__(self, model_path="yolov11n.pt", confidence=0.5):
+    def __init__(self, model_path="../AI/detect/train63/weights/best.pt", confidence=0.3):
         """새똥 탐지기 초기화"""
-        print("YOLOv11 모델 로딩 중...")
+        print("커스텀 새똥 탐지 모델 로딩 중...")
         self.model = YOLO(model_path)
         self.confidence = confidence
         self.target_coverage = 0.5  # 화면의 50% 커버리지
-        print("YOLOv11 모델 로딩 완료!")
+        print("커스텀 새똥 탐지 모델 로딩 완료!")
 
     def detect_bird_poop(self, frame):
         """프레임에서 새똥 탐지"""
@@ -178,13 +178,15 @@ class ArduinoClient:
         return self.send_command("get_status")
 
 class PiCameraAutoCleaningSystem:
-    def __init__(self, resolution=(640, 480), framerate=30):
+    def __init__(self, resolution=(640, 480), framerate=30, model_path="../AI/detect/train63/weights/best.pt", confidence=0.3):
         """
         PI 카메라 기반 자동 청소 시스템 초기화
         
         Args:
             resolution (tuple): 카메라 해상도 (width, height)
             framerate (int): 프레임 레이트
+            model_path (str): 커스텀 새똥 탐지 모델 파일 경로
+            confidence (float): 탐지 신뢰도 임계값 (새똥 특화)
         """
         # 시스템 상태 변수
         self.state = SystemState.NORMAL
@@ -225,7 +227,7 @@ class PiCameraAutoCleaningSystem:
             raise RuntimeError(f"PI 카메라 초기화 실패: {e}")
         
         # YOLO 탐지기 초기화
-        self.detector = BirdPoopDetector()
+        self.detector = BirdPoopDetector(model_path=model_path, confidence=confidence)
         
         # 아두이노 연결 (GPIO UART 우선, USB 시리얼 백업)
         self.arduino = self._connect_arduino()
@@ -341,10 +343,11 @@ class PiCameraAutoCleaningSystem:
     
     def run(self):
         """메인 실행 루프"""
-        print("\n🚀 자동 청소 시스템 시작!")
-        print("카메라 창에서 'q' 키로 종료, 'r' 키로 시스템 리셋")
+        print("\n🚀 자동 청소 시스템 시작! (헤드리스 모드)")
+        print("Ctrl+C로 종료, 10초마다 상태 출력")
         
         last_sensor_update = 0
+        last_status_print = 0
         
         try:
             while True:
@@ -392,8 +395,8 @@ class PiCameraAutoCleaningSystem:
                     cv2.putText(display_frame, humidity_text, (10, 150),
                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 0), 2)
                 
-                # 프레임 표시
-                cv2.imshow('PI Camera Bird Poop Detection & Cleaning System', display_frame)
+                # 프레임 표시 (헤드리스 모드에서는 주석 처리)
+                # cv2.imshow('PI Camera Bird Poop Detection & Cleaning System', display_frame)
                 
                 # 청소 로직
                 if is_detected and self.state != SystemState.STOPPED:
@@ -412,14 +415,21 @@ class PiCameraAutoCleaningSystem:
                     # 연속 탐지 방지를 위한 대기
                     time.sleep(2)
                 
-                # 키 입력 처리
-                key = cv2.waitKey(1) & 0xFF
-                if key == ord('q'):
-                    break
-                elif key == ord('r'):
-                    self.reset_system()
-                elif key == ord('s'):
+                # 키 입력 처리 (헤드리스 모드에서는 시간 기반으로 변경)
+                # key = cv2.waitKey(1) & 0xFF
+                # if key == ord('q'):
+                #     break
+                # elif key == ord('r'):
+                #     self.reset_system()
+                # elif key == ord('s'):
+                #     self._print_status(coverage_ratio)
+                
+                # 헤드리스 모드: 10초마다 상태 출력, Ctrl+C로 종료
+                if current_time - last_status_print > 10:  # 10초마다 상태 출력
                     self._print_status(coverage_ratio)
+                    last_status_print = current_time
+                    
+                time.sleep(0.1)  # CPU 사용량 조절
                 
         except KeyboardInterrupt:
             print("\n프로그램 종료 중...")
@@ -446,14 +456,43 @@ class PiCameraAutoCleaningSystem:
 
 def main():
     """메인 함수"""
+    import argparse
+    
+    # 명령줄 인자 파싱
+    parser = argparse.ArgumentParser(description='PI 카메라 커스텀 새똥 탐지 시스템')
+    parser.add_argument('--model', '-m', 
+                       default="../AI/detect/train63/weights/best.pt",
+                       help='새똥 탐지 모델 파일 경로 (기본값: ../AI/detect/train63/weights/best.pt)')
+    parser.add_argument('--confidence', '-c',
+                       type=float, default=0.3,
+                       help='탐지 신뢰도 임계값 (기본값: 0.3)')
+    parser.add_argument('--resolution', '-r',
+                       default="640x480",
+                       help='카메라 해상도 (기본값: 640x480)')
+    
+    args = parser.parse_args()
+    
+    # 해상도 파싱
+    try:
+        width, height = map(int, args.resolution.split('x'))
+        resolution = (width, height)
+    except:
+        print("❌ 잘못된 해상도 형식입니다. (예: 640x480)")
+        return 1
+    
     try:
         print("=== PI 카메라 새똥 탐지 시스템 ===")
-        print("라즈베리파이 카메라 모듈 + YOLOv11s + 자동 청소")
+        print("라즈베리파이 카메라 모듈 + 커스텀 새똥 특화 모델 + 자동 청소")
+        print(f"🎯 모델: {args.model}")
+        print(f"📊 신뢰도: {args.confidence}")
+        print(f"📺 해상도: {resolution}")
         
-        # 시스템 초기화 (해상도와 프레임 레이트 설정 가능)
+        # 시스템 초기화
         system = PiCameraAutoCleaningSystem(
-            resolution=(640, 480),  # 해상도: 640x480 (성능 최적화)
-            framerate=30           # 프레임 레이트: 30fps
+            resolution=resolution,
+            framerate=30,
+            model_path=args.model,
+            confidence=args.confidence
         )
         
         # 시스템 실행
@@ -466,6 +505,7 @@ def main():
         print("2. 카메라 모듈 활성화 (sudo raspi-config)")
         print("3. picamera2 라이브러리 설치")
         print("4. 아두이노 연결 상태")
+        print(f"5. 모델 파일 존재: {args.model}")
 
 if __name__ == "__main__":
     main()
