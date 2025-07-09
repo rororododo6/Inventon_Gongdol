@@ -1,0 +1,13 @@
+train: ../train/images
+val: ../valid/images
+test: ../test/images
+
+nc: 1
+names: ['Bird Poop']
+
+roboflow:
+  workspace: bird-vwlvh
+  project: birdpoo1-7sjg0
+  version: 1
+  license: MIT
+  url: https://universe.roboflow.com/bird-vwlvh/birdpoo1-7sjg0/dataset/1
