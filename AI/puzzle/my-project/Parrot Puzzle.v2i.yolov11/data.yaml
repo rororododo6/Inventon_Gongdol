@@ -1,0 +1,13 @@
+train: ../train/images
+val: ../valid/images
+test: ../test/images
+
+nc: 2
+names: ['solved', 'unsolved']
+
+roboflow:
+  workspace: parrot-puzzle
+  project: parrot-puzzle-wzk8q
+  version: 2
+  license: CC BY 4.0
+  url: https://universe.roboflow.com/parrot-puzzle/parrot-puzzle-wzk8q/dataset/2
