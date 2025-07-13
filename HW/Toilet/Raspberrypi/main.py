@@ -39,8 +39,8 @@ def run_script(script_name: str, description: str, model_path: Optional[str] = N
             print(f"❌ {script_name} 파일을 찾을 수 없습니다.")
             return
         
-        # 명령어 구성
-        cmd = ["/usr/bin/python3", script_name]
+        # 명령어 구성 (가상 환경의 Python 사용)
+        cmd = ["python", script_name]
         
         # 선택적 매개변수 추가
         if model_path:

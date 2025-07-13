@@ -1,7 +1,7 @@
 #include <Arduino.h>  // Arduino 헤더 파일
 #include <ArduinoJson.h>  // JSON 라이브러리
 #include <DHT.h>  // DHT 센서 라이브러리
-#include <Stepper.h>  // 스테핑 모터 라이브러리
+#include <Servo.h>  // 서보 모터 라이브러리
 #include "functions.h"  // 함수 헤더 파일
 
 // ========== 시스템 정보 ==========
@@ -19,18 +19,14 @@ unsigned int bufferIndex = 0; // 버퍼 인덱스
 #define DHTPIN 2  // DHT11 센서 연결 핀
 #define DHTTYPE DHT11  // DHT11 센서 타입
 
-// 스테핑 모터 (ULN2003 + 28BYJ-48)
-#define STEPS_PER_REVOLUTION 2048
-#define STEPPER_PIN1 5    // IN1
-#define STEPPER_PIN2 6    // IN2
-#define STEPPER_PIN3 7    // IN3
-#define STEPPER_PIN4 8    // IN4
+// 360도 서보모터 (MG996R)
+#define CLEANING_SERVO_PIN 9  // 청소 서보 핀 (MG996R)
 
-// 청소 시스템 핀
-#define CLEANING_SERVO_PIN 9  // 청소 서보 핀
+// 시스템 제어 핀
 #define EMERGENCY_STOP_PIN 3  // 긴급 정지 핀
 #define STATUS_LED_PIN 13  // 상태 LED 핀
 #define BUZZER_PIN 11  // 부저 핀
+#define TRASH_EMPTY_BUTTON_PIN 4  // 쓰레기통 비우기 버튼 핀
 
 // ========== 시스템 상수 ==========
 namespace SystemConfig {
@@ -41,21 +37,11 @@ namespace SystemConfig {
 }
 
 namespace ServoConfig {
-  const int SERVO_90_PULSE = 1500;    // 90도 위치 PWM
-  const int SERVO_0_PULSE = 1000;     // 0도 위치 PWM
-  const int SERVO_CYCLE_TIME = 18;    // PWM 주기
-  const byte SERVO_REPEAT_COUNT = 20;  // 반복 횟수
-  const int SERVO_HOLD_TIME = 1000;   // 위치 유지 시간
-}
-
-namespace StepperConfig {
-  const byte DEFAULT_SPEED = 10;      // 기본 속도 (RPM)
-  const byte MIN_SPEED = 5;           // 최소 속도
-  const byte MAX_SPEED = 20;          // 최대 속도
-  const byte CLEANING_SPEED = 12;     // 청소 속도
-  const int CLEANING_ROTATIONS = 3;   // 청소 시 회전 수
-  const int CLEANING_STEPS = STEPS_PER_REVOLUTION * CLEANING_ROTATIONS; // 청소 스텝 수
-  const int CLEANING_DELAY = 1000;    // 청소 단계 간 대기
+  const int SERVO_STOP = 1500;           // 정지 위치 (1500us)
+  const int SERVO_FORWARD = 1700;        // 앞으로 회전 (1700us)
+  const int SERVO_BACKWARD = 1300;       // 뒤로 회전 (1300us)
+  const unsigned long CLEANING_DURATION = 3000;  // 청소 시간 (3초)
+  const int SERVO_CYCLE_TIME = 20;       // PWM 주기 (20ms)
 }
 
 namespace BuzzerConfig {
@@ -76,7 +62,7 @@ namespace LEDConfig {
 
 // ========== 전역 객체 ==========
 DHT dht(DHTPIN, DHTTYPE); // DHT 센서 객체
-Stepper stepper(STEPS_PER_REVOLUTION, STEPPER_PIN1, STEPPER_PIN3, STEPPER_PIN2, STEPPER_PIN4); // 스테핑 모터 객체
+Servo cleaningServo; // 360도 서보모터 객체
 JsonDocument doc; // JSON 문서 객체
 
 // ========== 데이터 구조체 ==========
@@ -85,14 +71,17 @@ struct SystemStatus {
   bool cleaning_servo_active; // 청소 서보 작동 상태
   byte cleaning_cycles; // 청소 횟수
   unsigned long last_cleaning; // 마지막 청소 시간
+  bool trash_full; // 쓰레기통 가득 참 상태
+  bool trash_empty_button_pressed; // 쓰레기통 비우기 버튼 눌림 상태
 };
 
 struct SensorData {
   float temperature; // 온도
   float humidity; // 습도
-  long stepPosition; // 스텝 위치
-  byte stepperSpeed; // 스테핑 모터 속도
-  bool stepperRunning; // 스테핑 모터 실행 여부
+  bool servoRunning; // 서보 모터 실행 여부
+  int servoDirection; // 서보 모터 방향 (0: 정지, 1: 앞으로, -1: 뒤로)
+  bool trashFull; // 쓰레기통 가득 참 상태
+  bool trashEmptyButtonPressed; // 쓰레기통 비우기 버튼 눌림 상태
   unsigned long timestamp; // 데이터 수집 시간
 };
 
@@ -101,7 +90,7 @@ SensorData sensorData; // 센서 데이터 구조체
 
 // ========== PROGMEM 문자열 ==========
 const char MSG_READY[] PROGMEM = "Arduino Ready for Raspberry Pi Communication"; // 준비 메시지
-const char MSG_DHT_STEPPER[] PROGMEM = "DHT11 Sensor and ULN2003 Stepper Motor Control Available"; // DHT11 센서와 스테핑 모터 제어 가능
+const char MSG_DHT_SERVO[] PROGMEM = "DHT11 Sensor and MG996R 360 Servo Motor Control Available"; // DHT11 센서와 360도 서보모터 제어 가능
 const char MSG_CAGE_CLEANING[] PROGMEM = "Bird Cage Toilet Cleaning System Enabled"; // 새장 화장실 청소 시스템 활성화
 const char MSG_EMERGENCY[] PROGMEM = "Emergency Stop System Active"; // 긴급 정지 시스템 활성화
 
@@ -133,26 +122,19 @@ void executeCommand(const char* cmdType);  // 명령어 실행
 // 개별 명령어 처리기
 void handleSensorDataRequest();  // 센서 데이터 요청 처리
 void handleLedControl();  // LED 제어 처리
-void handleStepperMove();  // 스테핑 모터 이동 처리
-void handleStepperSpeedSet();  // 스테핑 모터 속도 설정
-void handleStepperStop();  // 스테핑 모터 정지
-void handleStepperReset();  // 스테핑 모터 위치 초기화
-void handleStepperDisable();  // 스테핑 모터 비활성화
+void handleServoControl();  // 서보 모터 제어 처리
+void handleServoStop();  // 서보 모터 정지
 void handleCageCleaning();  // 새장 화장실 청소 처리
-void handleCleaningServo();  // 청소 서보 작동 처리
 void handleEmergencyReset();  // 긴급 정지 초기화
 void handleCleaningCyclesReset();  // 청소 횟수 초기화
 void handleSystemTest();  // 시스템 테스트
+void handleTrashEmptyButton();  // 쓰레기통 비우기 버튼 처리
 
 // 하드웨어 제어
 void setLED(bool state);  // LED 제어
-void moveStepper(int steps, int speed = -1);  // 스테핑 모터 이동
-void stopStepper();  // 스테핑 모터 정지
-void setStepperSpeed(int speed);  // 스테핑 모터 속도 설정
-void resetStepperPosition();  // 스테핑 모터 위치 초기화
-void disableStepperPins();  // 스테핑 모터 핀 비활성화
+void controlServo(int direction);  // 서보 모터 제어 (0: 정지, 1: 앞으로, -1: 뒤로)
+void stopServo();  // 서보 모터 정지
 void performCageCleaning();  // 새장 화장실 청소 처리
-void activateCleaningServo();  // 청소 서보 작동 처리
 void playBuzzer(int frequency, int duration);  // 부저 작동 처리
 void blinkStatusLED(byte times);  // 상태 LED 깜빡임
 
@@ -160,8 +142,9 @@ void blinkStatusLED(byte times);  // 상태 LED 깜빡임
 void handleEmergencyStop();  // 긴급 정지 처리
 int freeMemory();  // 메모리 사용량 체크
 void copyProgmemToBuffer(const char* progmemStr, char* buffer, size_t maxLen);  // PROGMEM 문자열 복사
-bool isValidSpeed(int speed);  // 속도 유효성 검사
 bool isCleaningLimitReached();  // 청소 횟수 제한 체크
+void readTrashEmptyButton();  // 쓰레기통 비우기 버튼 읽기
+bool isTrashFull();  // 쓰레기통 가득 참 상태 체크
 
 // ========== 메인 설정 ==========
 void setup() {
@@ -187,6 +170,9 @@ void loop() {
     return;
   }
   
+  // 쓰레기통 비우기 버튼 체크
+  readTrashEmptyButton();
+  
   // 명령어 수신 처리
   handleSerialInput();  // 시리얼 입력 처리
   
@@ -199,20 +185,20 @@ void loop() {
 // ========== 초기화 함수들 ==========
 void initializeSystem() {
   dht.begin();
-  stepper.setSpeed(StepperConfig::DEFAULT_SPEED);
+  cleaningServo.attach(CLEANING_SERVO_PIN);
+  cleaningServo.writeMicroseconds(ServoConfig::SERVO_STOP); // 초기 정지 상태
 }
 
 void initializePins() {
-  pinMode(CLEANING_SERVO_PIN, OUTPUT);
   pinMode(STATUS_LED_PIN, OUTPUT);
   pinMode(BUZZER_PIN, OUTPUT);
   pinMode(EMERGENCY_STOP_PIN, INPUT_PULLUP);
+  pinMode(TRASH_EMPTY_BUTTON_PIN, INPUT_PULLUP);  // 쓰레기통 비우기 버튼 핀
   
   // 인터럽트 설정
   attachInterrupt(digitalPinToInterrupt(EMERGENCY_STOP_PIN), handleEmergencyStop, FALLING);
   
   // 초기 상태 설정
-  digitalWrite(CLEANING_SERVO_PIN, LOW);
   digitalWrite(STATUS_LED_PIN, LOW);
   digitalWrite(BUZZER_PIN, LOW);
 }
@@ -221,9 +207,10 @@ void initializeData() {
   // 센서 데이터 초기화
   sensorData.temperature = 0.0;
   sensorData.humidity = 0.0;
-  sensorData.stepPosition = 0;
-  sensorData.stepperSpeed = StepperConfig::DEFAULT_SPEED;
-  sensorData.stepperRunning = false;
+  sensorData.servoRunning = false;
+  sensorData.servoDirection = 0;
+  sensorData.trashFull = false;
+  sensorData.trashEmptyButtonPressed = false;
   sensorData.timestamp = millis();
   
   // 시스템 상태 초기화
@@ -231,6 +218,8 @@ void initializeData() {
   systemStatus.cleaning_servo_active = false;
   systemStatus.cleaning_cycles = 0;
   systemStatus.last_cleaning = 0;
+  systemStatus.trash_full = false;
+  systemStatus.trash_empty_button_pressed = false;
 }
 
 void printSystemInfo() {
@@ -241,7 +230,7 @@ void printSystemInfo() {
   Serial.println(F(" ==="));
   
   Serial.println((__FlashStringHelper*)MSG_READY);
-  Serial.println((__FlashStringHelper*)MSG_DHT_STEPPER);
+  Serial.println((__FlashStringHelper*)MSG_DHT_SERVO);
   Serial.println((__FlashStringHelper*)MSG_CAGE_CLEANING);
   Serial.println((__FlashStringHelper*)MSG_EMERGENCY);
 }
@@ -316,20 +305,12 @@ void executeCommand(const char* cmdType) {
     handleSensorDataRequest();
   } else if (strcmp_P(cmdType, PSTR("set_led")) == 0) {
     handleLedControl();
-  } else if (strcmp_P(cmdType, PSTR("move_stepper")) == 0) {
-    handleStepperMove();
-  } else if (strcmp_P(cmdType, PSTR("set_stepper_speed")) == 0) {
-    handleStepperSpeedSet();
-  } else if (strcmp_P(cmdType, PSTR("stop_stepper")) == 0) {
-    handleStepperStop();
-  } else if (strcmp_P(cmdType, PSTR("reset_stepper_position")) == 0) {
-    handleStepperReset();
-  } else if (strcmp_P(cmdType, PSTR("disable_stepper")) == 0) {
-    handleStepperDisable();
+  } else if (strcmp_P(cmdType, PSTR("control_servo")) == 0) {
+    handleServoControl();
+  } else if (strcmp_P(cmdType, PSTR("stop_servo")) == 0) {
+    handleServoStop();
   } else if (strcmp_P(cmdType, PSTR("cage_cleaning")) == 0) {
     handleCageCleaning();
-  } else if (strcmp_P(cmdType, PSTR("activate_cleaning_servo")) == 0) {
-    handleCleaningServo();
   } else if (strcmp_P(cmdType, PSTR("reset_emergency_stop")) == 0) {
     handleEmergencyReset();
   } else if (strcmp_P(cmdType, PSTR("reset_cleaning_cycles")) == 0) {
@@ -338,6 +319,8 @@ void executeCommand(const char* cmdType) {
     sendStatus();
   } else if (strcmp_P(cmdType, PSTR("system_test")) == 0) {
     handleSystemTest();
+  } else if (strcmp_P(cmdType, PSTR("trash_empty_button")) == 0) {
+    handleTrashEmptyButton();
   } else {
     sendError("Unknown command");
   }
@@ -356,51 +339,31 @@ void handleLedControl() {
   sendResponse("LED state changed", ledState);
 }
 
-// ========== 스테핑 모터 이동 처리 ==========
-void handleStepperMove() {
-  int steps = doc["steps"];
-  int speed = doc["speed"];
-  moveStepper(steps, speed);
+// ========== 서보 모터 제어 처리 ==========
+void handleServoControl() {
+  int direction = doc["direction"]; // 0: 정지, 1: 앞으로, -1: 뒤로
+  controlServo(direction);
   
   doc.clear();
-  doc["response"] = "Stepper moved";
-  doc["steps"] = steps;
-  doc["speed"] = speed;
+  doc["response"] = "Servo control changed";
+  doc["direction"] = direction;
   serializeJson(doc, Serial);
   Serial.println();
 }
 
-// ========== 스테핑 모터 속도 설정 처리 ==========
-void handleStepperSpeedSet() {
-  int speed = doc["speed"];
-  if (isValidSpeed(speed)) {
-    setStepperSpeed(speed);
-    sendResponse("Stepper speed changed", speed);
-  } else {
-    sendError("Invalid speed range");
-  }
-}
-
-// ========== 스테핑 모터 정지 처리 ==========
-void handleStepperStop() {
-  stopStepper();
-  sendResponse("Stepper stopped");
-}
-
-// ========== 스테핑 모터 위치 초기화 처리 ==========
-void handleStepperReset() {
-  resetStepperPosition();
-  sendResponse("Stepper position reset");
-}
-
-// ========== 스테핑 모터 핀 비활성화 처리 ==========
-void handleStepperDisable() {
-  disableStepperPins();
-  sendResponse("Stepper pins disabled");
+// ========== 서보 모터 정지 처리 ==========
+void handleServoStop() {
+  stopServo();
+  sendResponse("Servo stopped");
 }
 
 // ========== 새장 화장실 청소 처리 ==========
 void handleCageCleaning() {
+  if (isTrashFull()) {
+    Serial.println(F("{\"alert\":\"TRASH_FULL_EMPTY_REQUIRED\"}"));
+    return;
+  }
+  
   if (isCleaningLimitReached()) {
     Serial.println(F("{\"alert\":\"MAX_CLEANING_CYCLES_REACHED\"}"));
     return;
@@ -408,12 +371,6 @@ void handleCageCleaning() {
   
   performCageCleaning();
   sendResponse("Cage cleaning completed", systemStatus.cleaning_cycles);
-}
-
-// ========== 청소 서보 작동 처리 ==========
-void handleCleaningServo() {
-  activateCleaningServo();
-  sendResponse("Cleaning servo activated");
 }
 
 // ========== 긴급 정지 초기화 처리 ==========
@@ -446,6 +403,8 @@ void readSensorData() {
   
   sensorData.temperature = isnan(temp) ? -999 : temp;
   sensorData.humidity = isnan(hum) ? -999 : hum;
+  sensorData.trashFull = systemStatus.trash_full;
+  sensorData.trashEmptyButtonPressed = systemStatus.trash_empty_button_pressed;
   sensorData.timestamp = millis();
 }
 
@@ -455,9 +414,10 @@ void sendSensorData() {
   doc["type"] = "sensor_data";
   doc["temp"] = sensorData.temperature;
   doc["hum"] = sensorData.humidity;
-  doc["pos"] = sensorData.stepPosition;
-  doc["spd"] = sensorData.stepperSpeed;
-  doc["run"] = sensorData.stepperRunning;
+  doc["servo_run"] = sensorData.servoRunning;
+  doc["servo_dir"] = sensorData.servoDirection;
+  doc["trash_full"] = sensorData.trashFull;
+  doc["trash_empty_btn"] = sensorData.trashEmptyButtonPressed;
   doc["time"] = sensorData.timestamp;
   
   serializeJson(doc, Serial);
@@ -477,14 +437,15 @@ void sendStatus() {
   doc["mem"] = freeMemory();
   doc["ready"] = true;
   doc["dht"] = (sensorData.temperature != -999 && sensorData.humidity != -999);
-  doc["pos"] = sensorData.stepPosition;
-  doc["spd"] = sensorData.stepperSpeed;
-  doc["run"] = sensorData.stepperRunning;
+  doc["servo_run"] = sensorData.servoRunning;
+  doc["servo_dir"] = sensorData.servoDirection;
   doc["estop"] = systemStatus.emergency_stop;
-  doc["servo"] = systemStatus.cleaning_servo_active;
+  doc["servo_active"] = systemStatus.cleaning_servo_active;
   doc["cycles"] = systemStatus.cleaning_cycles;
   doc["last"] = systemStatus.last_cleaning;
   doc["max"] = SystemConfig::MAX_CLEANING_CYCLES;
+  doc["trash_full"] = systemStatus.trash_full;
+  doc["trash_empty_btn"] = systemStatus.trash_empty_button_pressed;
   
   serializeJson(doc, Serial);
   Serial.println();
@@ -513,44 +474,27 @@ void setLED(bool state) {
   digitalWrite(STATUS_LED_PIN, state ? HIGH : LOW);
 }
 
-// ========== 스테핑 모터 이동 ==========
-void moveStepper(int steps, int speed) {
-  if (speed > 0) {
-    setStepperSpeed(speed);
+// ========== 서보 모터 제어 ==========
+void controlServo(int direction) {
+  sensorData.servoDirection = direction;
+  
+  if (direction == 1) { // 앞으로
+    cleaningServo.writeMicroseconds(ServoConfig::SERVO_FORWARD);
+    sensorData.servoRunning = true;
+  } else if (direction == -1) { // 뒤로
+    cleaningServo.writeMicroseconds(ServoConfig::SERVO_BACKWARD);
+    sensorData.servoRunning = true;
+  } else { // 정지
+    cleaningServo.writeMicroseconds(ServoConfig::SERVO_STOP);
+    sensorData.servoRunning = false;
   }
-  
-  sensorData.stepperRunning = true;
-  stepper.step(steps);
-  sensorData.stepPosition += steps;
-  sensorData.stepperRunning = false;
-  
-  disableStepperPins();
 }
 
-// ========== 스테핑 모터 정지 ==========
-void stopStepper() {
-  sensorData.stepperRunning = false;
-  disableStepperPins();
-}
-
-// ========== 스테핑 모터 속도 설정 ==========
-void setStepperSpeed(int speed) {
-  speed = constrain(speed, StepperConfig::MIN_SPEED, StepperConfig::MAX_SPEED);
-  stepper.setSpeed(speed);
-  sensorData.stepperSpeed = (byte)speed;
-}
-
-// ========== 스테핑 모터 위치 초기화 ==========
-void resetStepperPosition() {
-  sensorData.stepPosition = 0;
-}
-
-// ========== 스테핑 모터 핀 비활성화 ==========
-void disableStepperPins() {
-  digitalWrite(STEPPER_PIN1, LOW);
-  digitalWrite(STEPPER_PIN2, LOW);
-  digitalWrite(STEPPER_PIN3, LOW);
-  digitalWrite(STEPPER_PIN4, LOW);
+// ========== 서보 모터 정지 ==========
+void stopServo() {
+  cleaningServo.writeMicroseconds(ServoConfig::SERVO_STOP);
+  sensorData.servoRunning = false;
+  sensorData.servoDirection = 0;
 }
 
 // ========== 새장 화장실 청소 처리 ==========
@@ -558,53 +502,37 @@ void performCageCleaning() {
   Serial.println(F("{\"info\":\"Cage cleaning started\"}"));
   
   setLED(true);
+  systemStatus.cleaning_servo_active = true;
   
-  // 1단계: 모래 밀어내기
-  activateCleaningServo();
+  // 1단계: 앞으로 3초 회전
+  Serial.println(F("{\"info\":\"Cleaning forward rotation started\"}"));
+  controlServo(1); // 앞으로
+  delay(ServoConfig::CLEANING_DURATION); // 3초
   
-  // 2단계: 스테핑 모터로 똥 치우기
-  moveStepper(StepperConfig::CLEANING_STEPS, StepperConfig::CLEANING_SPEED);
-  delay(StepperConfig::CLEANING_DELAY);
+  // 2단계: 뒤로 3초 회전
+  Serial.println(F("{\"info\":\"Cleaning backward rotation started\"}"));
+  controlServo(-1); // 뒤로
+  delay(ServoConfig::CLEANING_DURATION); // 3초
   
-  // 3단계: 원위치 복귀
-  moveStepper(-StepperConfig::CLEANING_STEPS, StepperConfig::CLEANING_SPEED);
-  
-  // 4단계: 추가 모래 정리
-  activateCleaningServo();
+  // 3단계: 정지
+  Serial.println(F("{\"info\":\"Cleaning rotation stopped\"}"));
+  stopServo();
   
   // 청소 완료 처리
   systemStatus.cleaning_cycles++;
   systemStatus.last_cleaning = millis();
+  systemStatus.cleaning_servo_active = false;
+  
+  // 10번 청소 후 쓰레기통 가득 참 상태로 설정
+  if (systemStatus.cleaning_cycles >= 10) {
+    systemStatus.trash_full = true;
+    Serial.println(F("{\"alert\":\"TRASH_FULL_AFTER_10_CLEANINGS\"}"));
+  }
   
   setLED(false);
   playBuzzer(BuzzerConfig::COMPLETE_FREQ, BuzzerConfig::COMPLETE_DURATION);
   
   Serial.println(F("{\"info\":\"Cage cleaning completed\"}"));
-}
-
-// ========== 청소 서보 작동 처리 ==========
-void activateCleaningServo() {
-  systemStatus.cleaning_servo_active = true;
-  
-  // 서보 모터 90도 회전
-  for (byte i = 0; i < ServoConfig::SERVO_REPEAT_COUNT; i++) {
-    digitalWrite(CLEANING_SERVO_PIN, HIGH);
-    delayMicroseconds(ServoConfig::SERVO_90_PULSE);
-    digitalWrite(CLEANING_SERVO_PIN, LOW);
-    delay(ServoConfig::SERVO_CYCLE_TIME);
-  }
-  
-  delay(ServoConfig::SERVO_HOLD_TIME);
-  
-  // 서보 모터 0도 복귀
-  for (byte i = 0; i < ServoConfig::SERVO_REPEAT_COUNT; i++) {
-    digitalWrite(CLEANING_SERVO_PIN, HIGH);
-    delayMicroseconds(ServoConfig::SERVO_0_PULSE);
-    digitalWrite(CLEANING_SERVO_PIN, LOW);
-    delay(ServoConfig::SERVO_CYCLE_TIME);
-  }
-  
-  systemStatus.cleaning_servo_active = false;
 }
 
 // ========== 부저 작동 처리 ==========
@@ -629,12 +557,10 @@ void handleEmergencyStop() {
   systemStatus.emergency_stop = true;
   
   // 모든 출력 즉시 정지
-  digitalWrite(CLEANING_SERVO_PIN, LOW);
-  disableStepperPins();
+  stopServo();
   setLED(true);
   
   systemStatus.cleaning_servo_active = false;
-  sensorData.stepperRunning = false;
 }
 
 // ========== 메모리 사용량 체크 ==========
@@ -650,12 +576,46 @@ void copyProgmemToBuffer(const char* progmemStr, char* buffer, size_t maxLen) {
   buffer[maxLen - 1] = '\0';
 }
 
-// ========== 속도 유효성 검사 ==========
-bool isValidSpeed(int speed) {
-  return speed >= StepperConfig::MIN_SPEED && speed <= StepperConfig::MAX_SPEED;
-}
-
 // ========== 청소 횟수 제한 체크 ==========
 bool isCleaningLimitReached() {
   return systemStatus.cleaning_cycles >= SystemConfig::MAX_CLEANING_CYCLES;
+}
+
+// ========== 쓰레기통 비우기 버튼 처리 ==========
+void handleTrashEmptyButton() {
+  if (systemStatus.trash_empty_button_pressed) {
+    systemStatus.trash_full = false;
+    systemStatus.trash_empty_button_pressed = false;
+    sendResponse("Trash emptied", 1);
+  } else {
+    sendError("Trash empty button not pressed");
+  }
+}
+
+// ========== 쓰레기통 비우기 버튼 읽기 ==========
+void readTrashEmptyButton() {
+  static bool lastButtonState = HIGH;
+  static unsigned long lastDebounceTime = 0;
+  const unsigned long debounceDelay = 50;
+  
+  bool currentButtonState = digitalRead(TRASH_EMPTY_BUTTON_PIN);
+  
+  if (currentButtonState != lastButtonState) {
+    lastDebounceTime = millis();
+  }
+  
+  if ((millis() - lastDebounceTime) > debounceDelay) {
+    if (currentButtonState == LOW && lastButtonState == HIGH) {
+      // 버튼이 눌렸을 때
+      systemStatus.trash_empty_button_pressed = true;
+      Serial.println(F("{\"alert\":\"TRASH_EMPTY_BUTTON_PRESSED\"}"));
+    }
+  }
+  
+  lastButtonState = currentButtonState;
+}
+
+// ========== 쓰레기통 가득 참 상태 체크 ==========
+bool isTrashFull() {
+  return systemStatus.trash_full;
 }

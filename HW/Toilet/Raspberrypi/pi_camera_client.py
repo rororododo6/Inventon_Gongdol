@@ -1,85 +1,216 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-PI 카메라 기반 커스텀 새똥 탐지 및 자동 청소 시스템
-라즈베리파이 카메라 모듈 + 새똥 특화 훈련 모델 + GPIO UART 통신
+PI 카메라와 아두이노 360도 서보모터를 이용한 새똥 탐지 자동 청소 시스템
 """
 
-try:
-    import serial
-    import serial.tools.list_ports
-except ImportError:
-    print("pyserial 라이브러리가 설치되지 않았습니다.")
-    print("다음 명령어로 설치하세요: pip install pyserial")
-    exit(1)
-
-try:
-    from picamera2 import Picamera2
-    import cv2
-    import numpy as np
-except ImportError:
-    print("카메라 라이브러리가 설치되지 않았습니다.")
-    print("다음 명령어로 설치하세요:")
-    print("sudo apt install python3-picamera2")
-    print("pip install opencv-python")
-    exit(1)
-
-try:
-    from ultralytics import YOLO
-except ImportError:
-    print("YOLO 라이브러리가 설치되지 않았습니다.")
-    print("다음 명령어로 설치하세요: pip install ultralytics")
-    exit(1)
-
 import json
+import serial
 import time
 import threading
+import cv2
+import numpy as np
 from datetime import datetime
 from enum import Enum
+from picamera2 import Picamera2
+from ultralytics import YOLO
+import serial.tools.list_ports
+from pathlib import Path
+import sys
+import os
+import queue
+import logging
 
+# 로깅 설정
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# 환경 변수 (비활성화)
+os.environ['DISPLAY'] = ':0'
+
+# ====== 시스템 상태 ======
 class SystemState(Enum):
     """시스템 상태"""
     NORMAL = "정상 작동"
     WARNING = "알림 후 제한 모드"
     STOPPED = "정지 상태"
 
+# ====== 새똥 탐지 시스템 ======
 class BirdPoopDetector:
     def __init__(self, model_path="../AI/detect/train63/weights/best.pt", confidence=0.3):
-        """새똥 탐지기 초기화"""
-        print("커스텀 새똥 탐지 모델 로딩 중...")
-        self.model = YOLO(model_path)
+        """
+        새똥 탐지 시스템 초기화
+        
+        Args:
+            model_path: YOLO 모델 경로
+            confidence: 탐지 신뢰도 임계값
+        """
+        self.model_path = model_path
         self.confidence = confidence
-        self.target_coverage = 0.5  # 화면의 50% 커버리지
-        print("커스텀 새똥 탐지 모델 로딩 완료!")
-
+        self.model = YOLO(model_path)
+        
+        # 새똥 탐지 영역 누적 저장
+        self.accumulated_areas = []  # 누적된 새똥 영역 저장
+        self.frame_dimensions = None  # 프레임 크기 저장
+        
+        print(f"커스텀 새똥 탐지 모델 로딩 완료!")
+        print(f"모델 경로: {model_path}")
+        print(f"신뢰도: {confidence}")
+    
+    def _calculate_iou(self, box1, box2):
+        """
+        두 박스의 IoU(Intersection over Union) 계산
+        
+        Args:
+            box1: (x1, y1, x2, y2) 
+            box2: (x1, y1, x2, y2)
+            
+        Returns:
+            float: IoU 값
+        """
+        x1_inter = max(box1[0], box2[0])
+        y1_inter = max(box1[1], box2[1])
+        x2_inter = min(box1[2], box2[2])
+        y2_inter = min(box1[3], box2[3])
+        
+        if x1_inter >= x2_inter or y1_inter >= y2_inter:
+            return 0.0
+        
+        inter_area = (x2_inter - x1_inter) * (y2_inter - y1_inter)
+        
+        box1_area = (box1[2] - box1[0]) * (box1[3] - box1[1])
+        box2_area = (box2[2] - box2[0]) * (box2[3] - box2[1])
+        
+        union_area = box1_area + box2_area - inter_area
+        
+        return inter_area / union_area if union_area > 0 else 0.0
+    
+    def _should_merge_areas(self, new_box, existing_box, threshold=0.1):
+        """
+        새로운 박스와 기존 박스를 병합할지 결정
+        
+        Args:
+            new_box: 새로운 박스
+            existing_box: 기존 박스
+            threshold: IoU 임계값
+            
+        Returns:
+            bool: 병합 여부
+        """
+        return self._calculate_iou(new_box, existing_box) > threshold
+    
+    def _merge_overlapping_areas(self, new_areas):
+        """
+        새로운 영역들을 기존 누적 영역과 병합
+        
+        Args:
+            new_areas: 새로 탐지된 영역들 [(x1, y1, x2, y2), ...]
+        """
+        for new_area in new_areas:
+            merged = False
+            
+            # 기존 영역들과 겹치는지 확인
+            for i, existing_area in enumerate(self.accumulated_areas):
+                if self._should_merge_areas(new_area, existing_area):
+                    # 병합: 두 영역을 포함하는 최소 박스 생성
+                    merged_box = (
+                        min(new_area[0], existing_area[0]),  # x1
+                        min(new_area[1], existing_area[1]),  # y1
+                        max(new_area[2], existing_area[2]),  # x2
+                        max(new_area[3], existing_area[3])   # y2
+                    )
+                    self.accumulated_areas[i] = merged_box
+                    merged = True
+                    break
+            
+            # 겹치는 영역이 없으면 새로 추가
+            if not merged:
+                self.accumulated_areas.append(new_area)
+    
+    def _calculate_total_coverage(self):
+        """
+        누적된 새똥 영역들의 총 커버리지 계산
+        
+        Returns:
+            float: 커버리지 비율 (%)
+        """
+        if not self.accumulated_areas or not self.frame_dimensions:
+            return 0.0
+        
+        total_area = 0
+        frame_area = self.frame_dimensions[0] * self.frame_dimensions[1]
+        
+        for area in self.accumulated_areas:
+            box_area = (area[2] - area[0]) * (area[3] - area[1])
+            total_area += box_area
+        
+        return (total_area / frame_area) * 100 if frame_area > 0 else 0.0
+    
     def detect_bird_poop(self, frame):
-        """프레임에서 새똥 탐지"""
-        results = self.model(frame, conf=self.confidence, verbose=False)
+        """
+        새똥 탐지 수행 (누적 방식)
         
-        if not results or len(results) == 0:
-            return False, 0.0, []
+        Args:
+            frame: 입력 프레임
+            
+        Returns:
+            tuple: (탐지 결과, 탐지 개수, 누적 영역 비율)
+        """
+        # 프레임 크기 저장
+        self.frame_dimensions = (frame.shape[1], frame.shape[0])  # (width, height)
         
-        frame_area = frame.shape[0] * frame.shape[1]
-        total_detection_area = 0
-        detection_boxes = []
+        results = self.model(frame, conf=self.confidence)
+        
+        detection_count = 0
+        new_areas = []
         
         for result in results:
-            boxes = result.boxes
-            if boxes is not None:
-                for box in boxes:
+            if result.boxes is not None:
+                detection_count = len(result.boxes)
+                for box in result.boxes:
                     x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
-                    box_area = (x2 - x1) * (y2 - y1)
-                    total_detection_area += box_area
-                    detection_boxes.append((int(x1), int(y1), int(x2), int(y2)))
+                    new_areas.append((x1, y1, x2, y2))
         
-        coverage_ratio = total_detection_area / frame_area
-        is_detected = coverage_ratio >= self.target_coverage
+        # 새로운 영역들을 누적 영역과 병합
+        if new_areas:
+            self._merge_overlapping_areas(new_areas)
         
-        return is_detected, coverage_ratio, detection_boxes
+        # 누적 커버리지 계산
+        accumulated_coverage = self._calculate_total_coverage()
+        
+        return results, detection_count, accumulated_coverage
+    
+    def reset_accumulated_areas(self):
+        """
+        누적된 새똥 영역 초기화 (청소 후 호출)
+        """
+        self.accumulated_areas = []
+        print("🧹 누적 새똥 영역 초기화 완료")
+    
+    def get_accumulated_info(self):
+        """
+        누적된 영역 정보 반환
+        
+        Returns:
+            dict: 누적 영역 정보
+        """
+        return {
+            'total_areas': len(self.accumulated_areas),
+            'coverage_ratio': self._calculate_total_coverage(),
+            'areas': self.accumulated_areas
+        }
 
+# ====== 아두이노 통신 ======
 class ArduinoClient:
     def __init__(self, port='/dev/ttyS0', baudrate=115200, timeout=1):
-        """아두이노 클라이언트 초기화"""
+        """
+        아두이노 클라이언트 초기화
+        
+        Args:
+            port: 시리얼 포트 (라즈베리파이 GPIO UART)
+            baudrate: 통신 속도
+            timeout: 타임아웃 시간
+        """
         self.port = port
         self.baudrate = baudrate
         self.timeout = timeout
@@ -98,7 +229,7 @@ class ArduinoClient:
             print(f"아두이노 연결 성공: {self.port}")
             return True
         except serial.SerialException as e:
-            print(f"아두이노 연결 실패: {e}")
+            print(f"아두이노 연결 실패 {self.port}: {e}")
             return False
     
     def disconnect(self):
@@ -109,8 +240,14 @@ class ArduinoClient:
             print("아두이노 연결 해제")
     
     def send_command(self, command, **kwargs):
-        """아두이노에 명령 전송"""
-        if not self.is_connected or self.serial_conn is None:
+        """
+        아두이노에 명령 전송
+        
+        Args:
+            command: 명령 타입
+            **kwargs: 추가 매개변수
+        """
+        if not self.is_connected:
             print("아두이노가 연결되지 않았습니다.")
             return None
         
@@ -120,13 +257,13 @@ class ArduinoClient:
         try:
             cmd_json = json.dumps(cmd_data) + '\n'
             self.serial_conn.write(cmd_json.encode('utf-8'))
+            time.sleep(0.1)
             
-            # 응답 대기
-            response = self.serial_conn.readline().decode('utf-8').strip()
-            if response:
-                return json.loads(response)
+            if self.serial_conn.in_waiting:
+                response = self.serial_conn.readline().decode('utf-8').strip()
+                if response:
+                    return json.loads(response)
             return None
-            
         except Exception as e:
             print(f"명령 전송 실패: {e}")
             return None
@@ -135,31 +272,24 @@ class ArduinoClient:
         """DHT11 센서 데이터 요청"""
         return self.send_command("get_sensor_data")
     
-    def move_stepper(self, steps, speed=12):
-        """스테핑 모터 이동"""
-        return self.send_command("move_stepper", steps=steps, speed=speed)
+    def control_servo(self, direction):
+        """
+        360도 서보모터 제어
+        
+        Args:
+            direction: 0(정지), 1(앞으로), -1(뒤로)
+        """
+        return self.send_command("control_servo", direction=direction)
     
-    def stop_stepper(self):
-        """스테핑 모터 정지"""
-        return self.send_command("stop_stepper")
-    
-    def disable_stepper(self):
-        """스테핑 모터 핀 비활성화 (전력 절약)"""
-        return self.send_command("disable_stepper")
-    
-    def reset_stepper_position(self):
-        """스테핑 모터 위치 초기화"""
-        return self.send_command("reset_stepper_position")
+    def stop_servo(self):
+        """360도 서보모터 정지"""
+        return self.send_command("stop_servo")
     
     # === 새장 화장실 청소 시스템 기능들 ===
     
     def perform_cage_cleaning(self):
-        """새장 화장실 청소 수행 (모래 밀어내기 + 스테핑 모터)"""
+        """새장 화장실 청소 수행 (앞으로 3초, 뒤로 3초)"""
         return self.send_command("cage_cleaning")
-    
-    def activate_cleaning_servo(self):
-        """청소 서보 작동 (모래 밀어내기)"""
-        return self.send_command("activate_cleaning_servo")
     
     def reset_emergency_stop(self):
         """긴급 정지 해제"""
@@ -176,17 +306,21 @@ class ArduinoClient:
     def get_system_status(self):
         """상세한 시스템 상태 정보 요청"""
         return self.send_command("get_status")
+    
+    def check_trash_empty_button(self):
+        """쓰레기통 비우기 버튼 상태 확인"""
+        return self.send_command("trash_empty_button")
 
 class PiCameraAutoCleaningSystem:
     def __init__(self, resolution=(640, 480), framerate=30, model_path="../AI/detect/train63/weights/best.pt", confidence=0.3):
         """
-        PI 카메라 기반 자동 청소 시스템 초기화
+        PI 카메라 자동 청소 시스템 초기화
         
         Args:
-            resolution (tuple): 카메라 해상도 (width, height)
-            framerate (int): 프레임 레이트
-            model_path (str): 커스텀 새똥 탐지 모델 파일 경로
-            confidence (float): 탐지 신뢰도 임계값 (새똥 특화)
+            resolution: 카메라 해상도
+            framerate: 프레임레이트
+            model_path: YOLO 모델 경로
+            confidence: 탐지 신뢰도
         """
         # 시스템 상태 변수
         self.state = SystemState.NORMAL
@@ -195,10 +329,12 @@ class PiCameraAutoCleaningSystem:
         self.warning_extra_count = 0
         self.max_warning_extra = 2
         
-        # 청소 동작 설정
-        self.steps_per_revolution = 2048  # 28BYJ-48 한 바퀴
-        self.cleaning_revolutions = 5     # 청소 시 앞으로 5바퀴
-        self.cleaning_speed = 12          # RPM
+        # 360도 서보모터 청소 설정
+        self.cleaning_duration = 3  # 청소 시간 (3초)
+        
+        # 쓰레기통 상태 관리
+        self.trash_full = False  # 쓰레기통 가득 참 상태
+        self.total_cleanings = 0  # 총 청소 횟수 (10번마다 쓰레기통 비우기 필요)
         
         # 온습도 모니터링
         self.last_temp = None
@@ -233,8 +369,7 @@ class PiCameraAutoCleaningSystem:
         self.arduino = self._connect_arduino()
         
         # 초기 설정
-        self.arduino.reset_stepper_position()
-        self.arduino.disable_stepper()
+        self.arduino.stop_servo()
         
         print("=== PI 카메라 자동 청소 시스템 초기화 완료 ===")
         print(f"상태: {self.state.value}")
@@ -260,180 +395,200 @@ class PiCameraAutoCleaningSystem:
         raise RuntimeError("아두이노 연결에 실패했습니다.")
     
     def _perform_cleaning(self):
-        """청소 동작 수행"""
+        """청소 동작 수행 (앞으로 3초, 뒤로 3초)"""
         print("\n🧹 청소 시작!")
         
-        # 앞으로 5바퀴 회전
-        total_steps = self.steps_per_revolution * self.cleaning_revolutions
-        print(f"앞으로 이동 중... ({self.cleaning_revolutions}바퀴, {total_steps}스텝)")
+        # 앞으로 3초 회전
+        print("앞으로 회전 시작...")
+        self.arduino.control_servo(1)  # 앞으로
+        time.sleep(self.cleaning_duration)
         
-        self.arduino.move_stepper(total_steps, self.cleaning_speed)
-        time.sleep(2)  # 동작 완료 대기
+        # 뒤로 3초 회전
+        print("뒤로 회전 시작...")
+        self.arduino.control_servo(-1)  # 뒤로
+        time.sleep(self.cleaning_duration)
         
-        # 원위치 복귀
-        print("원위치 복귀 중...")
-        self.arduino.move_stepper(-total_steps, self.cleaning_speed)
-        time.sleep(2)  # 동작 완료 대기
+        # 정지
+        print("서보모터 정지...")
+        self.arduino.stop_servo()
         
-        # 전력 절약
-        self.arduino.disable_stepper()
+        # 총 청소 횟수 증가
+        self.total_cleanings += 1
         
-        print("✅ 청소 완료!")
+        # 10번 청소 후 쓰레기통 가득 참 상태로 설정
+        if self.total_cleanings >= 10:
+            self.trash_full = True
+            print("🗑️ 쓰레기통을 비워주세요! 10번 청소 완료")
         
+        print("🧹 청소 완료!")
+    
     def _update_sensor_data(self):
         """센서 데이터 업데이트"""
-        sensor_data = self.arduino.get_sensor_data()
-        if sensor_data:
-            temp = sensor_data.get('temperature')
-            humidity = sensor_data.get('humidity')
-            
-            if temp != -999:
-                self.last_temp = temp
-            if humidity != -999:
-                self.last_humidity = humidity
+        try:
+            sensor_data = self.arduino.get_sensor_data()
+            if sensor_data:
+                self.last_temp = sensor_data.get('temp', '센서 오류')
+                self.last_humidity = sensor_data.get('hum', '센서 오류')
+                
+                # 쓰레기통 상태 확인
+                trash_full = sensor_data.get('trash_full', False)
+                trash_empty_btn = sensor_data.get('trash_empty_btn', False)
+                
+                # 쓰레기통 비우기 버튼이 눌렸으면 상태 초기화
+                if trash_empty_btn:
+                    self.trash_full = False
+                    self.total_cleanings = 0
+                    print("✅ 쓰레기통 비우기 완료! 청소 카운트 초기화")
+                    
+        except Exception as e:
+            print(f"센서 데이터 업데이트 실패: {e}")
     
     def _print_status(self, coverage_ratio=0.0):
-        """현재 상태 출력"""
-        current_time = datetime.now().strftime('%H:%M:%S')
-        print(f"\n[{current_time}] === 시스템 상태 ===")
+        """상태 정보 출력"""
+        now = datetime.now()
+        print(f"\n[{now.strftime('%H:%M:%S')}] === 시스템 상태 ===")
         print(f"상태: {self.state.value}")
         print(f"청소 횟수: {self.clean_count}/{self.max_clean_count}")
+        print(f"총 청소 횟수: {self.total_cleanings}")
         
+        # 쓰레기통 상태 표시
+        if self.trash_full:
+            print("🗑️ 쓰레기통 가득 참! 비우기 버튼을 눌러주세요.")
+        elif self.total_cleanings >= 8:
+            print(f"⚠️ 쓰레기통 비우기까지 {10 - self.total_cleanings}번 남음")
+        
+        # 10번째 청소 달성 상태 표시
+        total_cleaning_count = self.clean_count + self.warning_extra_count
+        if total_cleaning_count >= 10:
+            print("🏆 10번째 청소 달성 완료!")
+        elif total_cleaning_count >= 8:
+            print(f"🎯 10번째 청소까지 {10 - total_cleaning_count}번 남음")
+        
+        # 누적 영역 정보 출력
+        accumulated_info = self.detector.get_accumulated_info()
+        print(f"누적 새똥 영역: {accumulated_info['total_areas']}개")
+        print(f"누적 커버리지: {coverage_ratio:.2f}% (임계값: 50%)")
+        
+        if coverage_ratio >= 50.0:
+            print("🚨 청소 필요! 누적 커버리지가 50%를 초과했습니다.")
+        elif coverage_ratio >= 30.0:
+            print("⚠️ 주의: 누적 커버리지가 30%를 초과했습니다.")
+        elif coverage_ratio >= 10.0:
+            print("📊 누적 커버리지가 10%를 초과했습니다.")
+        
+        # 온습도 정보
+        temp_str = f"{self.last_temp}°C" if self.last_temp != '센서 오류' and self.last_temp is not None else "센서 오류"
+        humidity_str = f"{self.last_humidity}%" if self.last_humidity != '센서 오류' and self.last_humidity is not None else "센서 오류"
+        print(f"🌡️  온도: {temp_str}")
+        print(f"💧 습도: {humidity_str}")
+        
+        # 경고 상태 정보
         if self.state == SystemState.WARNING:
-            print(f"알림 후 추가 청소: {self.warning_extra_count}/{self.max_warning_extra}")
-        
-        print(f"새똥 탐지 커버리지: {coverage_ratio:.2%}")
-        
-        # 온습도 데이터 출력
-        if self.last_temp is not None:
-            print(f"🌡️  온도: {self.last_temp}°C")
-        else:
-            print("🌡️  온도: 센서 오류")
-            
-        if self.last_humidity is not None:
-            print(f"💧 습도: {self.last_humidity}%")
-        else:
-            print("💧 습도: 센서 오류")
+            print(f"⚠️  경고 상태: 추가 청소 {self.warning_extra_count}/{self.max_warning_extra}")
+        elif self.state == SystemState.STOPPED:
+            print("🛑 시스템 정지: 최대 청소 횟수 도달")
     
     def _check_system_state(self):
         """시스템 상태 확인 및 업데이트"""
-        if self.state == SystemState.NORMAL:
-            if self.clean_count >= self.max_clean_count:
+        # 최대 청소 횟수 체크
+        if self.clean_count >= self.max_clean_count:
+            if self.state == SystemState.NORMAL:
                 self.state = SystemState.WARNING
-                print("\n🚨 ===== 알림 =====")
-                print("쓰레기통을 비워주세요!")
-                print("알림 후 2번만 더 작동 가능합니다.")
-                print("==================")
-                
-        elif self.state == SystemState.WARNING:
-            if self.warning_extra_count >= self.max_warning_extra:
-                self.state = SystemState.STOPPED
-                print("\n⛔ ===== 시스템 정지 =====")
-                print("쓰레기통을 비워주기 전까지 작동을 중지합니다.")
-                print("비워주신 후 'r' 키를 눌러 재시작하세요.")
-                print("========================")
+                print(f"⚠️  경고: 최대 청소 횟수 도달! 추가 {self.max_warning_extra}회만 더 가능합니다.")
+            elif self.state == SystemState.WARNING:
+                if self.warning_extra_count >= self.max_warning_extra:
+                    self.state = SystemState.STOPPED
+                    print("🛑 시스템 정지: 최대 청소 횟수 초과!")
+                    return False
+        
+        return True
     
     def reset_system(self):
-        """시스템 리셋 (쓰레기통을 비운 후)"""
+        """시스템 상태 초기화"""
         self.state = SystemState.NORMAL
         self.clean_count = 0
         self.warning_extra_count = 0
-        print("\n✅ 시스템 리셋 완료!")
-        print("정상 작동을 재개합니다.")
+        
+        # 누적 새똥 영역 초기화
+        self.detector.reset_accumulated_areas()
+        
+        # 쓰레기통 상태 초기화
+        self.trash_full = False
+        self.total_cleanings = 0
+        
+        self.arduino.reset_cleaning_cycles()
+        print("🔄 시스템 상태가 초기화되었습니다.")
     
     def run(self):
         """메인 실행 루프"""
         print("\n🚀 자동 청소 시스템 시작! (헤드리스 모드)")
         print("Ctrl+C로 종료, 10초마다 상태 출력")
         
-        last_sensor_update = 0
-        last_status_print = 0
+        last_sensor_update = time.time()
+        last_status_print = time.time()
         
         try:
             while True:
-                # PI 카메라에서 프레임 캡처
+                # 시스템 상태 체크
+                if not self._check_system_state():
+                    print("시스템이 정지되었습니다.")
+                    break
+                
+                # 프레임 캡처
                 frame = self.picam2.capture_array()
                 
-                # 센서 데이터 주기적 업데이트
-                current_time = time.time()
-                if current_time - last_sensor_update > self.sensor_update_interval:
-                    self._update_sensor_data()
-                    last_sensor_update = current_time
-                
                 # 새똥 탐지
-                is_detected, coverage_ratio, detection_boxes = self.detector.detect_bird_poop(frame)
+                results, detection_count, coverage_ratio = self.detector.detect_bird_poop(frame)
                 
-                # 탐지 결과 시각화
-                display_frame = frame.copy()
-                for box in detection_boxes:
-                    x1, y1, x2, y2 = box
-                    cv2.rectangle(display_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                    cv2.putText(display_frame, "Bird Poop", (x1, y1-10),
-                               cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+                # 탐지 결과 처리
+                if detection_count > 0:
+                    # 시각화 (헤드리스 모드에서는 표시하지 않음)
+                    annotated_frame = results[0].plot()
                 
-                # 상태 정보 표시
-                status_text = f"State: {self.state.value}"
-                cv2.putText(display_frame, status_text, (10, 30),
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-                
-                count_text = f"Clean: {self.clean_count}/{self.max_clean_count}"
-                cv2.putText(display_frame, count_text, (10, 60),
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-                
-                coverage_text = f"Coverage: {coverage_ratio:.1%}"
-                cv2.putText(display_frame, coverage_text, (10, 90),
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-                
-                # 온습도 정보 표시
-                if self.last_temp is not None:
-                    temp_text = f"Temp: {self.last_temp}C"
-                    cv2.putText(display_frame, temp_text, (10, 120),
-                               cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 0), 2)
-                
-                if self.last_humidity is not None:
-                    humidity_text = f"Humidity: {self.last_humidity}%"
-                    cv2.putText(display_frame, humidity_text, (10, 150),
-                               cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 0), 2)
-                
-                # 프레임 표시 (헤드리스 모드에서는 주석 처리)
-                # cv2.imshow('PI Camera Bird Poop Detection & Cleaning System', display_frame)
-                
-                # 청소 로직
-                if is_detected and self.state != SystemState.STOPPED:
-                    self._print_status(coverage_ratio)
-                    
-                    if self.state == SystemState.NORMAL:
+                # 청소 필요 여부 결정 (누적 커버리지 50% 이상)
+                if coverage_ratio >= 50.0:
+                    # 쓰레기통이 가득 찬 경우 청소 거부
+                    if self.trash_full:
+                        print("🗑️ 쓰레기통을 비워주세요! 청소를 계속하려면 비우기 버튼을 눌러주세요.")
+                    elif self.state == SystemState.NORMAL:
                         self._perform_cleaning()
                         self.clean_count += 1
-                        
+                        # 청소 후 누적 영역 초기화
+                        self.detector.reset_accumulated_areas()
+                        # 10번째 청소 시 특별 메시지 출력
+                        if self.clean_count == 10:
+                            print("\n🎉 축하합니다! 10번째 청소를 완료했습니다!")
+                            print("🏆 시스템이 안정적으로 10회 청소를 성공적으로 수행했습니다.")
+                            print("🔧 청소 성능이 최적화되었습니다.")
                     elif self.state == SystemState.WARNING:
                         self._perform_cleaning()
                         self.warning_extra_count += 1
-                    
-                    self._check_system_state()
-                    
-                    # 연속 탐지 방지를 위한 대기
-                    time.sleep(2)
+                        # 청소 후 누적 영역 초기화
+                        self.detector.reset_accumulated_areas()
+                        # WARNING 상태에서도 총 청소 횟수에 포함
+                        total_cleaning_count = self.clean_count + self.warning_extra_count
+                        if total_cleaning_count == 10:
+                            print("\n🎉 축하합니다! 총 10번째 청소를 완료했습니다!")
+                            print("🏆 시스템이 경고 상태에서도 안정적으로 청소를 수행했습니다.")
+                            print("🔧 청소 성능이 최적화되었습니다.")
+                    elif self.state == SystemState.STOPPED:
+                        print("🛑 시스템 정지 상태: 청소 불가")
                 
-                # 키 입력 처리 (헤드리스 모드에서는 시간 기반으로 변경)
-                # key = cv2.waitKey(1) & 0xFF
-                # if key == ord('q'):
-                #     break
-                # elif key == ord('r'):
-                #     self.reset_system()
-                # elif key == ord('s'):
-                #     self._print_status(coverage_ratio)
+                # 센서 데이터 업데이트 (3초마다)
+                if time.time() - last_sensor_update > self.sensor_update_interval:
+                    self._update_sensor_data()
+                    last_sensor_update = time.time()
                 
-                # 헤드리스 모드: 10초마다 상태 출력, Ctrl+C로 종료
-                if current_time - last_status_print > 10:  # 10초마다 상태 출력
+                # 상태 출력 (10초마다)
+                if time.time() - last_status_print > 10:
                     self._print_status(coverage_ratio)
-                    last_status_print = current_time
-                    
-                time.sleep(0.1)  # CPU 사용량 조절
+                    last_status_print = time.time()
+                
+                # 짧은 대기 (CPU 사용량 조절)
+                time.sleep(0.1)
                 
         except KeyboardInterrupt:
             print("\n프로그램 종료 중...")
-            
         finally:
             self.cleanup()
     
@@ -441,34 +596,34 @@ class PiCameraAutoCleaningSystem:
         """리소스 정리"""
         print("시스템 정리 중...")
         
-        # 스테핑 모터 정지 및 전력 절약
-        if self.arduino.is_connected:
-            self.arduino.stop_stepper()
-            self.arduino.disable_stepper()
+        try:
+            # 서보모터 정지
+            self.arduino.stop_servo()
+            
+            # 카메라 정리
+            if hasattr(self, 'picam2'):
+                self.picam2.stop()
+                self.picam2.close()
+            
+            # 아두이노 연결 해제
             self.arduino.disconnect()
+            
+        except Exception as e:
+            print(f"정리 중 오류: {e}")
         
-        # PI 카메라 해제
-        if hasattr(self, 'picam2'):
-            self.picam2.stop()
-        
-        cv2.destroyAllWindows()
-        print("시스템 정리 완료!")
+        print("시스템 정리 완료")
 
 def main():
     """메인 함수"""
     import argparse
     
-    # 명령줄 인자 파싱
-    parser = argparse.ArgumentParser(description='PI 카메라 커스텀 새똥 탐지 시스템')
-    parser.add_argument('--model', '-m', 
-                       default="../AI/detect/train63/weights/best.pt",
-                       help='새똥 탐지 모델 파일 경로 (기본값: ../AI/detect/train63/weights/best.pt)')
-    parser.add_argument('--confidence', '-c',
-                       type=float, default=0.3,
-                       help='탐지 신뢰도 임계값 (기본값: 0.3)')
-    parser.add_argument('--resolution', '-r',
-                       default="640x480",
-                       help='카메라 해상도 (기본값: 640x480)')
+    parser = argparse.ArgumentParser(description='PI 카메라 새똥 탐지 자동 청소 시스템')
+    parser.add_argument('--model', type=str, default='../AI/detect/train63/weights/best.pt', 
+                        help='YOLO 모델 경로')
+    parser.add_argument('--confidence', type=float, default=0.3, 
+                        help='탐지 신뢰도 (0.0-1.0)')
+    parser.add_argument('--resolution', type=str, default='640x480', 
+                        help='카메라 해상도 (예: 640x480)')
     
     args = parser.parse_args()
     
@@ -476,36 +631,40 @@ def main():
     try:
         width, height = map(int, args.resolution.split('x'))
         resolution = (width, height)
-    except:
-        print("❌ 잘못된 해상도 형식입니다. (예: 640x480)")
-        return 1
+    except ValueError:
+        print("잘못된 해상도 형식입니다. 예: 640x480")
+        return
+    
+    # 모델 파일 존재 확인
+    model_path = Path(args.model)
+    if not model_path.exists():
+        print(f"모델 파일을 찾을 수 없습니다: {model_path}")
+        return
+    
+    print("=== PI 카메라 새똥 탐지 시스템 ===")
+    print("라즈베리파이 카메라 모듈 + 커스텀 새똥 특화 모델 + 자동 청소")
+    print(f"🎯 모델: {args.model}")
+    print(f"📊 신뢰도: {args.confidence}")
+    print(f"📺 해상도: {resolution}")
+    print("🔄 누적 탐지 방식: 새똥 영역을 누적 저장하여 50% 초과 시 청소")
+    print("🧹 청소 후 누적 영역 초기화")
+    print("🎯 10번째 청소 달성 시 축하 메시지 출력")
+    print("🗑️ 10번 청소 후 쓰레기통 비우기 필요 (아두이노 버튼으로 완료 확인)")
     
     try:
-        print("=== PI 카메라 새똥 탐지 시스템 ===")
-        print("라즈베리파이 카메라 모듈 + 커스텀 새똥 특화 모델 + 자동 청소")
-        print(f"🎯 모델: {args.model}")
-        print(f"📊 신뢰도: {args.confidence}")
-        print(f"📺 해상도: {resolution}")
-        
-        # 시스템 초기화
+        # 시스템 초기화 및 실행
         system = PiCameraAutoCleaningSystem(
             resolution=resolution,
-            framerate=30,
             model_path=args.model,
             confidence=args.confidence
         )
-        
-        # 시스템 실행
         system.run()
         
     except Exception as e:
         print(f"시스템 오류: {e}")
-        print("다음을 확인하세요:")
-        print("1. PI 카메라 모듈 연결 상태")
-        print("2. 카메라 모듈 활성화 (sudo raspi-config)")
-        print("3. picamera2 라이브러리 설치")
-        print("4. 아두이노 연결 상태")
-        print(f"5. 모델 파일 존재: {args.model}")
+        return 1
+    
+    return 0
 
 if __name__ == "__main__":
-    main()
+    exit(main())
