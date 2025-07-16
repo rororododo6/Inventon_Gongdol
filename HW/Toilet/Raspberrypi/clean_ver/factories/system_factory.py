@@ -8,6 +8,7 @@ Factory 패턴으로 시스템 구성요소들을 생성하고 의존성 주입�
 import sys
 import os
 import logging
+import importlib.util
 from typing import Dict, Any, Optional
 
 # 실제 ArduinoClient 임포트를 위한 경로 추가
@@ -15,12 +16,13 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.dirname(os.path.dirname(current_dir))
 sys.path.insert(0, project_root)
 
-# 실제 ArduinoClient 클래스 임포트
+# 개선된 ArduinoClient 클래스 임포트
 try:
-    from 라즈베리파이.pi_camera_client import ArduinoClient
+    from ..managers.arduino_client_improved import ArduinoClientImproved as ArduinoClient
     USE_REAL_ARDUINO = True
+    print("✅ 개선된 ArduinoClient를 사용합니다.")
 except ImportError:
-    print("⚠️ 실제 ArduinoClient를 찾을 수 없습니다. 스텁을 사용합니다.")
+    print("⚠️ 개선된 ArduinoClient를 찾을 수 없습니다. 스텁을 사용합니다.")
     USE_REAL_ARDUINO = False
 
 from ..optimized_config import SystemConfig
@@ -28,7 +30,7 @@ from ..managers import (
     DetectionManager, DetectionError,
     SensorManager, SensorError,
     CameraManager, CameraError,
-    CleaningManager, CleaningError
+    CleaningManager
 )
 
 class SystemFactoryError(Exception):
