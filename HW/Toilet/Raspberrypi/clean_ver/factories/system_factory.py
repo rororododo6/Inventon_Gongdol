@@ -37,21 +37,25 @@ class SystemFactoryError(Exception):
 
 class ArduinoClientStub:
     """아두이노 클라이언트 스텁 (테스트용)"""
-    def __init__(self, port='/dev/ttyS0', baudrate=115200, timeout=1):
+    def __init__(self, port='/dev/serial0', baudrate=115200, timeout=2):
         self.port = port
         self.baudrate = baudrate
         self.timeout = timeout
         self.is_connected = False
-        print(f"🔧 테스트용 ArduinoClientStub 생성됨 (포트: {port})")
+        print(f"🔧 테스트용 ArduinoClientStub 생성됨")
+        print(f"   - 포트: {port} (GPIO 14, 15번 하드웨어 시리얼)")
+        print(f"   - 속도: {baudrate} bps")
     
     def connect(self):
         self.is_connected = True
-        print("🔧 [STUB] 아두이노 연결 시뮬레이션")
+        print("🔧 [STUB] 아두이노 하드웨어 시리얼 연결 시뮬레이션")
+        print("   - GPIO 14 (TXD) → 아두이노 RX")
+        print("   - GPIO 15 (RXD) ← 아두이노 TX")
         return True
     
     def disconnect(self):
         self.is_connected = False
-        print("🔧 [STUB] 아두이노 연결 해제 시뮬레이션")
+        print("🔧 [STUB] 아두이노 하드웨어 시리얼 연결 해제 시뮬레이션")
     
     def get_sensor_data(self):
         return {"temperature": 25.0, "humidity": 60.0}
@@ -71,6 +75,31 @@ class ArduinoClientStub:
     def reset_stepper_position(self):
         print("🔧 [STUB] 스테핑 모터 위치 리셋 시뮬레이션")
         return {"status": "reset"}
+    
+    def get_system_status(self):
+        return {
+            "connected": self.is_connected,
+            "port": self.port,
+            "baudrate": self.baudrate,
+            "cleaning_cycles": 0,
+            "uptime": 10000
+        }
+    
+    def perform_cage_cleaning(self):
+        print("🔧 [STUB] 새장 화장실 전체 청소 시뮬레이션")
+        return {"status": "cleaning_completed"}
+    
+    def activate_cleaning_servo(self):
+        print("🔧 [STUB] 청소 서보모터 작동 시뮬레이션")
+        return {"status": "servo_activated"}
+    
+    def emergency_stop(self):
+        print("🔧 [STUB] 긴급 정지 시뮬레이션")
+        return {"status": "emergency_stopped"}
+    
+    def reset_emergency_stop(self):
+        print("🔧 [STUB] 긴급 정지 해제 시뮬레이션")
+        return {"status": "emergency_reset"}
 
 class SystemFactory:
     """시스템 구성요소 팩토리"""
@@ -111,21 +140,22 @@ class SystemFactory:
             try:
                 if USE_REAL_ARDUINO and not self.config.get('use_stub', False):
                     # 실제 ArduinoClient 사용
-                    arduino_client = ArduinoClient(
-                        port=self.config.get('arduino_port', SystemConfig.ARDUINO_PORT),
-                        baudrate=self.config.get('arduino_baudrate', SystemConfig.ARDUINO_BAUDRATE),
-                        timeout=self.config.get('arduino_timeout', SystemConfig.ARDUINO_TIMEOUT)
-                    )
-                    # 연결 시도
-                    if arduino_client.connect():
+                    arduino_client = self._try_connect_real_arduino()
+                    if arduino_client:
                         self._components['arduino_client'] = arduino_client
                         self.logger.info("✅ 실제 아두이노 클라이언트 연결 성공")
                     else:
                         self.logger.warning("⚠️ 실제 아두이노 연결 실패, 스텁 사용")
-                        self._components['arduino_client'] = ArduinoClientStub()
+                        self._components['arduino_client'] = ArduinoClientStub(
+                            port=self.config.get('arduino_port', SystemConfig.ARDUINO_PORT),
+                            baudrate=self.config.get('arduino_baudrate', SystemConfig.ARDUINO_BAUDRATE)
+                        )
                 else:
                     # 스텁 사용 (테스트 모드)
-                    self._components['arduino_client'] = ArduinoClientStub()
+                    self._components['arduino_client'] = ArduinoClientStub(
+                        port=self.config.get('arduino_port', SystemConfig.ARDUINO_PORT),
+                        baudrate=self.config.get('arduino_baudrate', SystemConfig.ARDUINO_BAUDRATE)
+                    )
                     self.logger.info("🔧 테스트용 아두이노 클라이언트 스텁 생성")
                     
             except Exception as e:
@@ -136,6 +166,38 @@ class SystemFactory:
                 self.logger.warning("⚠️ 오류로 인해 스텁 사용")
         
         return self._components['arduino_client']
+    
+    def _try_connect_real_arduino(self):
+        """실제 아두이노 연결 시도 (여러 포트 시도)"""
+        # 시도할 포트 목록 (우선순위 순)
+        ports_to_try = [
+            self.config.get('arduino_port', SystemConfig.ARDUINO_PORT),  # 메인 포트 (serial0)
+            *SystemConfig.ARDUINO_BACKUP_PORTS  # 백업 포트들
+        ]
+        
+        for port in ports_to_try:
+            try:
+                self.logger.info(f"🔌 아두이노 연결 시도: {port}")
+                arduino_client = ArduinoClient(
+                    port=port,
+                    baudrate=self.config.get('arduino_baudrate', SystemConfig.ARDUINO_BAUDRATE),
+                    timeout=self.config.get('arduino_timeout', SystemConfig.ARDUINO_TIMEOUT)
+                )
+                
+                # 연결 시도
+                if arduino_client.connect():
+                    self.logger.info(f"✅ 아두이노 연결 성공: {port}")
+                    if port == SystemConfig.ARDUINO_PORT:
+                        self.logger.info("   - GPIO 14 (TXD), 15 (RXD) 하드웨어 시리얼 사용")
+                    return arduino_client
+                else:
+                    self.logger.warning(f"⚠️ 아두이노 연결 실패: {port}")
+                    
+            except Exception as e:
+                self.logger.warning(f"⚠️ 포트 {port} 연결 시도 중 오류: {e}")
+                continue
+        
+        return None
     
     def create_detection_manager(self) -> DetectionManager:
         """탐지 관리자 생성"""
@@ -261,6 +323,12 @@ class SystemFactory:
         # 최적화 설정 가져오기
         optimized_settings = SystemConfig.get_optimized_settings()
         
+        # YOLO 모델 정보 생성
+        model_path = self.config.get('yolo_model_path') or optimized_settings.get('yolo_model_path', SystemConfig.YOLO_MODEL_PATH)
+        
+        # 모델 유형 판별
+        model_info = self._get_model_info(model_path)
+        
         return {
             'factory_config': self.config,
             'created_components': list(self._components.keys()),
@@ -273,16 +341,55 @@ class SystemFactory:
                 'frame_skip_interval': SystemConfig.FRAME_SKIP_INTERVAL
             },
             'optimized_settings': optimized_settings,
-            'yolo_model_info': {
-                'current_model': optimized_settings.get('yolo_model_path', SystemConfig.YOLO_MODEL_PATH),
-                'is_yolov11s': 'yolov11s.pt' in optimized_settings.get('yolo_model_path', SystemConfig.YOLO_MODEL_PATH),
-                'confidence': optimized_settings.get('yolo_confidence', SystemConfig.YOLO_CONFIDENCE)
-            },
+            'yolo_model_info': model_info,
             'memory_info': {
                 'available_gb': __import__('psutil').virtual_memory().available / (1024**3),
                 'optimization_applied': optimized_settings.get('warning_message') is not None
             }
         }
+    
+    def _get_model_info(self, model_path: str) -> Dict[str, Any]:
+        """모델 정보 생성"""
+        if 'best.pt' in model_path:
+            return {
+                'type': 'custom',
+                'name': '사용자 정의 학습 모델',
+                'accuracy': 'High (새똥 탐지 특화)',
+                'performance': 'Optimized',
+                'current_model': model_path,
+                'is_custom': True,
+                'confidence': SystemConfig.YOLO_CONFIDENCE
+            }
+        elif 'yolov11s.pt' in model_path:
+            return {
+                'type': 'pretrained',
+                'name': 'YOLOv11s',
+                'accuracy': 'Medium',
+                'performance': 'Medium',
+                'current_model': model_path,
+                'is_custom': False,
+                'confidence': SystemConfig.YOLO_CONFIDENCE
+            }
+        elif 'yolov11n.pt' in model_path:
+            return {
+                'type': 'pretrained', 
+                'name': 'YOLOv11n',
+                'accuracy': 'Low',
+                'performance': 'High',
+                'current_model': model_path,
+                'is_custom': False,
+                'confidence': SystemConfig.YOLO_CONFIDENCE
+            }
+        else:
+            return {
+                'type': 'unknown',
+                'name': os.path.basename(model_path),
+                'accuracy': 'Unknown',
+                'performance': 'Unknown',
+                'current_model': model_path,
+                'is_custom': False,
+                'confidence': SystemConfig.YOLO_CONFIDENCE
+            }
     
     def validate_system(self) -> Dict[str, bool]:
         """시스템 유효성 검증"""

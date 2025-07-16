@@ -12,6 +12,12 @@ from typing import Optional, Dict, Any
 from dataclasses import dataclass
 from enum import Enum
 
+class SystemState(Enum):
+    """시스템 상태"""
+    NORMAL = "정상 작동"
+    WARNING = "알림 후 제한 모드"
+    STOPPED = "정지 상태"
+
 class CleaningMode(Enum):
     """청소 모드"""
     SIMPLE = "simple"      # 간단한 청소 (스테핑 모터만)
@@ -27,6 +33,22 @@ class CleaningResult:
     steps_moved: int
     servo_used: bool
     error_message: Optional[str] = None
+
+@dataclass
+class CleaningStatus:
+    """청소 상태 데이터"""
+    is_cleaning: bool
+    current_mode: Optional[CleaningMode]
+    progress: float  # 0.0 ~ 1.0
+    last_cleaning_time: Optional[float]
+    total_cleanings: int
+    successful_cleanings: int
+    failed_cleanings: int
+    emergency_stopped: bool = False
+
+class CleaningError(Exception):
+    """청소 관련 예외"""
+    pass
 
 class CleaningManager:
     """새장 화장실 청소 관리자 클래스"""
@@ -286,4 +308,17 @@ class CleaningManager:
             return True
         except Exception as e:
             self.logger.error(f"청소 횟수 초기화 실패: {str(e)}")
-            return False 
+            return False
+    
+    def get_status(self) -> CleaningStatus:
+        """현재 청소 상태 반환"""
+        return CleaningStatus(
+            is_cleaning=False,  # 실제 구현에서는 청소 중 상태를 추적
+            current_mode=self.cleaning_mode,
+            progress=1.0,  # 완료 상태
+            last_cleaning_time=time.time(),  # 마지막 청소 시간
+            total_cleanings=self.total_cleanings,
+            successful_cleanings=self.successful_cleanings,
+            failed_cleanings=self.failed_cleanings,
+            emergency_stopped=False
+        ) 

@@ -202,12 +202,12 @@ class BirdPoopDetector:
 
 # ====== 아두이노 통신 ======
 class ArduinoClient:
-    def __init__(self, port='/dev/ttyS0', baudrate=115200, timeout=1):
+    def __init__(self, port='/dev/serial0', baudrate=115200, timeout=1):
         """
         아두이노 클라이언트 초기화
         
         Args:
-            port: 시리얼 포트 (라즈베리파이 GPIO UART)
+            port: 시리얼 포트 (라즈베리파이 GPIO 14, 15번 하드웨어 UART)
             baudrate: 통신 속도
             timeout: 타임아웃 시간
         """
@@ -379,7 +379,7 @@ class PiCameraAutoCleaningSystem:
         """아두이노 연결 (GPIO UART 우선, USB 백업)"""
         # 1. GPIO UART 시도
         print("GPIO UART 연결 시도...")
-        arduino = ArduinoClient(port='/dev/ttyS0')
+        arduino = ArduinoClient(port='/dev/serial0')
         if arduino.connect():
             return arduino
         

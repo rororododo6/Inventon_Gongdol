@@ -19,23 +19,25 @@ logger = logging.getLogger(__name__)
 def display_menu():
     """메뉴 표시"""
     print("\n" + "="*60)
-    print("🎯 PI 카메라 자동 청소 시스템 (YOLOv11s)")
+    print("�� PI 카메라 자동 청소 시스템 (사용자 정의 모델)")
     print("="*60)
     print("1. 클린코딩 버전 실행 (권장) ⭐")
     print("2. 클린코딩 버전 (헤드리스 모드)")
     print("3. 클린코딩 버전 (테스트 모드)")
     print("4. 시스템 검사")
-    print("5. 기존 PI 카메라 클라이언트")
-    print("6. 종료")
+    print("5. 시리얼 설정 도우미 🔌")
+    print("6. 기존 PI 카메라 클라이언트")
+    print("7. 종료")
     print("="*60)
-    print("💡 YOLOv11s 모델 사용 - 높은 정확도와 안정적인 성능")
+    print("💡 사용자 정의 학습 모델 사용 - 새똥 탐지 특화 높은 정확도")
     print("   - 매니저 패턴 적용")
     print("   - Factory 패턴 적용")
     print("   - 의존성 주입")
     print("   - 강화된 예외 처리")
     print("   - 캐싱 및 성능 최적화")
     print("   - 헤드리스 모드 지원")
-    print("   - 적응형 메모리 관리 (3GB 미만 시 자동으로 YOLOv11n 사용)")
+    print("   - 적응형 메모리 관리 (메모리 부족 시 해상도 자동 조정)")
+    print("   - 하드웨어 시리얼 통신 (GPIO 14, 15번 핀, 115200 bps)")
     print("="*60)
 
 def run_clean_version(mode="normal"):
@@ -99,7 +101,7 @@ def run_command(cmd: list, description: str) -> None:
 
 def validate_choice(choice: str) -> bool:
     """선택값 유효성 검증"""
-    return choice.isdigit() and 1 <= int(choice) <= 6
+    return choice.isdigit() and 1 <= int(choice) <= 7
 
 def main():
     """메인 실행 함수"""
@@ -109,10 +111,10 @@ def main():
         while True:
             display_menu()
             
-            choice = input("\n선택하세요 (1-6): ").strip()
+            choice = input("\n선택하세요 (1-7): ").strip()
             
             if not validate_choice(choice):
-                print("❌ 잘못된 선택입니다. 1-6 중에서 선택하세요.")
+                print("❌ 잘못된 선택입니다. 1-7 중에서 선택하세요.")
                 continue
             
             choice_num = int(choice)
@@ -130,15 +132,23 @@ def main():
                 run_clean_version("check")
                 
             elif choice_num == 5:
-                run_legacy_script("pi_camera_client.py", "기존 PI 카메라 클라이언트")
+                # 시리얼 설정 도우미 실행 (현재 디렉토리)
+                script_path = os.path.join(os.path.dirname(__file__), "setup_serial.py")
+                if os.path.exists(script_path):
+                    run_command([sys.executable, script_path], "시리얼 설정 도우미")
+                else:
+                    print(f"❌ {script_path} 파일을 찾을 수 없습니다.")
                 
             elif choice_num == 6:
+                run_legacy_script("pi_camera_client.py", "기존 PI 카메라 클라이언트")
+                
+            elif choice_num == 7:
                 print("\n👋 시스템을 종료합니다.")
                 logger.info("시스템 정상 종료")
                 break
             
             # 계속 진행할지 확인
-            if choice_num != 6:
+            if choice_num != 7:
                 continue_choice = input("\n다른 모드를 실행하시겠습니까? (y/n): ").strip().lower()
                 if continue_choice not in ['y', 'yes', '']:
                     print("👋 시스템을 종료합니다.")
