@@ -1,8 +1,8 @@
 #include <Arduino.h>  // Arduino 헤더 파일
 #include <ArduinoJson.h>  // JSON 라이브러리
-#include <DHT.h>  // DHT 센서 라이브러리
+#include <DHT11.h>  // DHT11 센서 라이브러리
 #include <Servo.h>  // 서보 모터 라이브러리
-#include "functions.h"  // 함수 헤더 파일
+//#include "functions.h"  // 함수 헤더 파일
 
 // ========== 시스템 정보 ==========
 const char SYSTEM_VERSION[] PROGMEM = "1.3.1";  // 클린코딩 버전
@@ -17,15 +17,14 @@ unsigned int bufferIndex = 0; // 버퍼 인덱스
 // ========== 하드웨어 핀 정의 ==========
 // DHT11 센서
 #define DHTPIN 2  // DHT11 센서 연결 핀
-#define DHTTYPE DHT11  // DHT11 센서 타입
 
 // 360도 서보모터 (MG996R)
-#define CLEANING_SERVO_PIN 9  // 청소 서보 핀 (MG996R)
+#define CLEANING_SERVO_PIN 6  // 청소 서보 핀 (MG996R)
 
 // 시스템 제어 핀
 #define EMERGENCY_STOP_PIN 3  // 긴급 정지 핀
-#define STATUS_LED_PIN 13  // 상태 LED 핀
-#define BUZZER_PIN 11  // 부저 핀
+#define STATUS_LED_PIN 7  // 상태 LED 핀
+#define BUZZER_PIN 5  // 부저 핀
 #define TRASH_EMPTY_BUTTON_PIN 4  // 쓰레기통 비우기 버튼 핀
 
 // ========== 시스템 상수 ==========
@@ -61,7 +60,7 @@ namespace LEDConfig {
 }
 
 // ========== 전역 객체 ==========
-DHT dht(DHTPIN, DHTTYPE); // DHT 센서 객체
+DHT11 dht11(DHTPIN); // DHT11 센서 객체
 Servo cleaningServo; // 360도 서보모터 객체
 JsonDocument doc; // JSON 문서 객체
 
@@ -140,6 +139,7 @@ void blinkStatusLED(byte times);  // 상태 LED 깜빡임
 
 // 유틸리티
 void handleEmergencyStop();  // 긴급 정지 처리
+void checkEmergencyButtonHold();  // 긴급 정지 버튼 2초 길게 누르기 체크
 int freeMemory();  // 메모리 사용량 체크
 void copyProgmemToBuffer(const char* progmemStr, char* buffer, size_t maxLen);  // PROGMEM 문자열 복사
 bool isCleaningLimitReached();  // 청소 횟수 제한 체크
@@ -167,6 +167,7 @@ void loop() {
   // 긴급 정지 상태 확인
   if (systemStatus.emergency_stop) {
     handleEmergencyMode();  // 긴급 모드 처리
+    checkEmergencyButtonHold();  // 2초 길게 누르기 체크
     return;
   }
   
@@ -184,7 +185,6 @@ void loop() {
 
 // ========== 초기화 함수들 ==========
 void initializeSystem() {
-  dht.begin();
   cleaningServo.attach(CLEANING_SERVO_PIN);
   cleaningServo.writeMicroseconds(ServoConfig::SERVO_STOP); // 초기 정지 상태
 }
@@ -398,11 +398,12 @@ void handleSystemTest() {
 
 // ========== 센서 데이터 읽기 ==========
 void readSensorData() {
-  float temp = dht.readTemperature();
-  float hum = dht.readHumidity();
+  int temp = dht11.readTemperature();
+  int hum = dht11.readHumidity();
   
-  sensorData.temperature = isnan(temp) ? -999 : temp;
-  sensorData.humidity = isnan(hum) ? -999 : hum;
+  // 새 라이브러리는 에러 시 DHT11::ERROR_TIMEOUT(-1) 또는 DHT11::ERROR_CHECKSUM(-2) 반환
+  sensorData.temperature = (temp < 0) ? -999 : temp;
+  sensorData.humidity = (hum < 0) ? -999 : hum;
   sensorData.trashFull = systemStatus.trash_full;
   sensorData.trashEmptyButtonPressed = systemStatus.trash_empty_button_pressed;
   sensorData.timestamp = millis();
@@ -552,15 +553,27 @@ void blinkStatusLED(byte times) {
   }
 }
 
-// ========== 긴급 정지 처리 ==========
+// ========== 긴급 정지 처리 (활성화만) ==========
 void handleEmergencyStop() {
-  systemStatus.emergency_stop = true;
+  static unsigned long lastInterruptTime = 0;
+  unsigned long interruptTime = millis();
   
-  // 모든 출력 즉시 정지
-  stopServo();
-  setLED(true);
+  // 디바운싱: 200ms 이내의 중복 신호 무시
+  if (interruptTime - lastInterruptTime < 200) {
+    return;
+  }
+  lastInterruptTime = interruptTime;
   
-  systemStatus.cleaning_servo_active = false;
+  // 긴급 정지만 활성화 (해제는 2초 길게 누르기로만 가능)
+  if (!systemStatus.emergency_stop) {
+    systemStatus.emergency_stop = true;
+    
+    // 모든 출력 즉시 정지
+    stopServo();
+    setLED(true);
+    systemStatus.cleaning_servo_active = false;
+    Serial.println(F("{\"alert\":\"EMERGENCY_STOP_ACTIVATED\",\"message\":\"Hold button 2s to reset\"}"));
+  }
 }
 
 // ========== 메모리 사용량 체크 ==========
@@ -618,4 +631,53 @@ void readTrashEmptyButton() {
 // ========== 쓰레기통 가득 참 상태 체크 ==========
 bool isTrashFull() {
   return systemStatus.trash_full;
+}
+
+// ========== 긴급 정지 버튼 2초 길게 누르기 체크 ==========
+void checkEmergencyButtonHold() {
+  static bool buttonWasPressed = false;
+  static unsigned long buttonPressStartTime = 0;
+  static unsigned long lastBlinkTime = 0;
+  static bool ledBlinkState = false;
+  
+  bool buttonCurrentlyPressed = (digitalRead(EMERGENCY_STOP_PIN) == LOW);
+  
+  if (buttonCurrentlyPressed) {
+    if (!buttonWasPressed) {
+      // 버튼이 새로 눌렸을 때
+      buttonWasPressed = true;
+      buttonPressStartTime = millis();
+      Serial.println(F("{\"info\":\"Hold button to reset emergency stop...\"}"));
+    }
+    
+    unsigned long holdTime = millis() - buttonPressStartTime;
+    
+    // 1초 후부터 LED 깜빡임으로 진행상황 표시
+    if (holdTime >= 1000) {
+      if (millis() - lastBlinkTime >= 100) {  // 100ms마다 깜빡임
+        ledBlinkState = !ledBlinkState;
+        setLED(ledBlinkState);
+        lastBlinkTime = millis();
+      }
+    }
+    
+    // 2초 이상 눌렀을 때 긴급 정지 해제
+    if (holdTime >= 2000) {
+      systemStatus.emergency_stop = false;
+      setLED(false);
+      Serial.println(F("{\"info\":\"EMERGENCY_STOP_DEACTIVATED\",\"message\":\"System restored\"}"));
+      
+      // 상태 초기화
+      buttonWasPressed = false;
+      buttonPressStartTime = 0;
+      ledBlinkState = false;
+    }
+  } else {
+    if (buttonWasPressed) {
+      // 버튼을 놓았을 때
+      buttonWasPressed = false;
+      setLED(true);  // 긴급 정지 상태로 LED 다시 켜기
+      Serial.println(F("{\"info\":\"Button released - emergency stop still active\"}"));
+    }
+  }
 }
