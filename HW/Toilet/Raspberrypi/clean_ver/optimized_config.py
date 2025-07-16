@@ -16,9 +16,10 @@ class SystemConfig:
     CAMERA_FPS = 30
     CAMERA_WARMUP_TIME = 2
     
-    # YOLO 탐지 설정 - YOLOv11s 사용
-    YOLO_MODEL_PATH = "yolov11s.pt"  # Small 모델로 변경 (더 정확함)
-    YOLO_CONFIDENCE = 0.6  # YOLOv11s에 맞게 신뢰도 약간 상향
+    # 탐지 모델 설정
+    YOLO_MODEL_PATH = "/home/parrot1/gongdol/Inventon_Gongdol/HW/Toilet/AI/detect/train63/weights/best.pt"  # 사용자 정의 학습된 모델
+    YOLO_CONFIDENCE = 0.6  # 신뢰도 임계값
+    YOLO_IOU_THRESHOLD = 0.5  # NMS IOU 임계값
     TARGET_COVERAGE = 0.05  # 더 정확한 모델이므로 커버리지 기준 낮춤
     
     # 성능 최적화 설정 - YOLOv11s에 맞게 조정
@@ -31,21 +32,21 @@ class SystemConfig:
         """라즈베리파이 메모리에 따른 최적화 설정"""
         available_memory = psutil.virtual_memory().available / (1024**3)  # GB
         
-        if available_memory < 3.0:  # 3GB 미만 - YOLOv11s는 메모리 많이 사용
+        if available_memory < 3.0:  # 3GB 미만 - 메모리 부족으로 해상도 낮춤
             return {
                 'camera_resolution': (320, 240),
                 'frame_skip_interval': 6,  # 더 많이 스킵
-                'yolo_model_path': 'yolov11n.pt',  # 메모리 부족시 nano 모델 권장
-                'yolo_confidence': 0.5,
+                'yolo_model_path': cls.YOLO_MODEL_PATH,  # 사용자 정의 모델 사용
+                'yolo_confidence': 0.5,  # 신뢰도 약간 낮춤
                 'enable_frame_skip': True,
                 'batch_size': 1,
-                'warning_message': '⚠️ 메모리 부족으로 YOLOv11n 모델 권장'
+                'warning_message': '⚠️ 메모리 부족으로 해상도 및 프레임레이트 조정됨'
             }
         elif available_memory < 5.0:  # 5GB 미만
             return {
                 'camera_resolution': (480, 360),
                 'frame_skip_interval': 4,
-                'yolo_model_path': 'yolov11s.pt',
+                'yolo_model_path': cls.YOLO_MODEL_PATH,  # 사용자 정의 모델 사용
                 'yolo_confidence': 0.6,
                 'enable_frame_skip': True,
                 'batch_size': 1,
@@ -55,7 +56,7 @@ class SystemConfig:
             return {
                 'camera_resolution': (640, 480),
                 'frame_skip_interval': 3,
-                'yolo_model_path': 'yolov11s.pt',
+                'yolo_model_path': cls.YOLO_MODEL_PATH,  # 사용자 정의 모델 사용
                 'yolo_confidence': 0.6,
                 'enable_frame_skip': True,
                 'batch_size': 1,
@@ -76,10 +77,25 @@ class SystemConfig:
     MAX_CLEAN_COUNT = 10
     MAX_WARNING_EXTRA = 2
     
-    # 통신 설정
-    ARDUINO_PORT = '/dev/ttyS0'
+    # 통신 설정 - 라즈베리파이 하드웨어 시리얼 (GPIO 14, 15번 핀)
+    # GPIO 14 (TXD) - 데이터 송신
+    # GPIO 15 (RXD) - 데이터 수신
+    ARDUINO_PORT = '/dev/serial0'  # 라즈베리파이 하드웨어 UART (GPIO 14, 15번)
     ARDUINO_BAUDRATE = 115200
-    ARDUINO_TIMEOUT = 1
+    ARDUINO_TIMEOUT = 2  # 하드웨어 시리얼이므로 조금 더 여유있게
+    ARDUINO_BACKUP_PORTS = ['/dev/ttyS0', '/dev/ttyAMA0']  # 백업 포트들
+    
+    # 하드웨어 시리얼 특화 설정
+    SERIAL_WRITE_TIMEOUT = 1
+    SERIAL_READ_TIMEOUT = 2
+    SERIAL_RETRY_COUNT = 3
+    SERIAL_RETRY_DELAY = 0.1
+    
+    # UART 핀 정의 (참고용)
+    UART_TX_PIN = 14  # GPIO 14 - TXD (송신)
+    UART_RX_PIN = 15  # GPIO 15 - RXD (수신)
+    UART_GROUND_PIN = 6  # GND
+    UART_POWER_PIN = 4   # 5V (아두이노 전원용)
     
     # 디버그 설정
     DEBUG_MODE = False

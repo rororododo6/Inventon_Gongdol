@@ -64,45 +64,72 @@ def check_hardware():
         print(f"❌ 라즈베리파이 카메라 - {e}")
     
     # 시리얼 포트 확인
-    serial_ports = ['/dev/ttyS0', '/dev/ttyACM0', '/dev/ttyUSB0']
+    print("\n🔌 시리얼 포트 확인:")
+    serial_ports = ['/dev/serial0', '/dev/ttyS0', '/dev/ttyAMA0', '/dev/ttyACM0', '/dev/ttyUSB0']
     found_port = False
     
     for port in serial_ports:
         if os.path.exists(port):
             print(f"✅ 시리얼 포트: {port}")
+            if port == '/dev/serial0':
+                print("   - GPIO 14 (TXD), 15 (RXD) 하드웨어 시리얼")
             found_port = True
             break
     
     if not found_port:
         issues.append("시리얼 포트를 찾을 수 없습니다")
         print("❌ 시리얼 포트 - 아두이노 연결 확인 필요")
+        print("💡 라즈베리파이 하드웨어 시리얼 설정 필요:")
+        print("   1. sudo raspi-config → Interface Options → Serial")
+        print("   2. Login shell over serial: No")
+        print("   3. Serial port hardware: Yes")
+        print("   4. 재부팅 후 /dev/serial0 확인")
     
     # YOLO 모델 확인
-    model_paths = ['yolov11s.pt', 'yolov11n.pt', '../yolov11s.pt', '../yolov11n.pt']
+    print("\n🎯 YOLO 모델 확인:")
+    custom_model_path = '/home/parrot1/gongdol/Inventon_Gongdol/HW/Toilet/AI/detect/train63/weights/best.pt'
+    fallback_models = ['yolov11s.pt', 'yolov11n.pt', '../yolov11s.pt', '../yolov11n.pt']
     found_model = False
     model_used = None
     
-    for model_path in model_paths:
-        if os.path.exists(model_path):
-            print(f"✅ YOLO 모델: {model_path}")
-            found_model = True
-            model_used = model_path
-            break
+    # 사용자 정의 모델 우선 확인
+    if os.path.exists(custom_model_path):
+        print(f"✅ 사용자 정의 YOLO 모델: {custom_model_path}")
+        print("   - 새똥 탐지용 학습된 모델")
+        found_model = True
+        model_used = custom_model_path
+    else:
+        print(f"❌ 사용자 정의 모델 없음: {custom_model_path}")
+        print("💡 백업 모델 확인 중...")
+        
+        # 백업 모델 확인
+        for model_path in fallback_models:
+            if os.path.exists(model_path):
+                print(f"✅ 백업 YOLO 모델: {model_path}")
+                found_model = True
+                model_used = model_path
+                break
     
     if not found_model:
-        issues.append("YOLO 모델 파일을 찾을 수 없습니다")
+        issues.append("YOLO 모델을 찾을 수 없습니다")
         print("❌ YOLO 모델 - 다운로드 필요")
-        print("💡 YOLOv11s 다운로드: wget https://github.com/ultralytics/assets/releases/download/v0.0.0/yolov11s.pt")
-        print("💡 YOLOv11n 다운로드: wget https://github.com/ultralytics/assets/releases/download/v0.0.0/yolov11n.pt")
+        print("💡 사용자 정의 모델 경로 확인:")
+        print(f"   {custom_model_path}")
+        print("💡 또는 기본 모델 다운로드:")
+        print("   wget https://github.com/ultralytics/assets/releases/download/v0.0.0/yolov11s.pt")
+        print("   wget https://github.com/ultralytics/assets/releases/download/v0.0.0/yolov11n.pt")
+    elif model_used == custom_model_path:
+        print("✅ 사용자 정의 학습 모델 사용 - 높은 새똥 탐지 정확도 기대")
+        print("   - 학습 데이터에 최적화된 모델")
+        print("   - 새장 환경 특화 탐지")
     elif model_used and 'yolov11s.pt' in model_used:
-        print("🎯 YOLOv11s 모델 사용 중 - 높은 정확도, 중간 성능")
-        # 메모리 사용량 경고
-        import psutil
-        available_memory = psutil.virtual_memory().available / (1024**3)
-        if available_memory < 4.0:
-            print("⚠️ 경고: YOLOv11s는 4GB 이상 메모리 권장. 현재 사용 가능:", f"{available_memory:.1f}GB")
+        print("⚠️ 백업 모델 사용 중 - YOLOv11s")
+        print("   - 범용 모델이므로 정확도가 낮을 수 있음")
+        print("   - 사용자 정의 모델 사용 권장")
     elif model_used and 'yolov11n.pt' in model_used:
-        print("⚡ YOLOv11n 모델 사용 중 - 빠른 성능, 기본 정확도")
+        print("⚠️ 백업 모델 사용 중 - YOLOv11n")
+        print("   - 빠르지만 정확도가 낮음")
+        print("   - 사용자 정의 모델 사용 권장")
     
     if issues:
         print(f"\n⚠️ 하드웨어 문제: {len(issues)}개")

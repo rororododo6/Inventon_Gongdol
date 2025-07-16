@@ -123,18 +123,73 @@ sudo reboot
 ### 2. Python 환경 설정
 
 ```bash
-# Python 패키지 관리자 업데이트
-sudo apt install python3-pip python3-venv -y
+# 시스템 업데이트
+sudo apt update && sudo apt upgrade -y
 
-# 가상환경 생성 (선택사항)
-python3 -m venv ~/birdcage_env
-source ~/birdcage_env/bin/activate
+# 카메라 활성화
+sudo raspi-config
+# 3 Interface Options → P1 Camera → Yes → Finish
 
-# 필수 시스템 패키지 설치
-sudo apt install python3-opencv python3-numpy python3-picamera2 -y
+# 하드웨어 시리얼 활성화 (GPIO 14, 15번 핀)
+sudo raspi-config
+# 3 Interface Options → P6 Serial
+# Login shell over serial: No (시리얼 콘솔 비활성화)
+# Serial port hardware: Yes (하드웨어 시리얼 활성화)
+
+# 재부팅
+sudo reboot
 ```
 
-### 3. 프로젝트 의존성 설치
+### 3. 라즈베리파이 하드웨어 시리얼 설정
+
+```bash
+# 시리얼 포트 확인
+ls -l /dev/serial* /dev/ttyS* /dev/ttyAMA*
+
+# 올바른 출력 예시:
+# lrwxrwxrwx 1 root root 7 날짜 시간 /dev/serial0 -> ttyAMA0
+# crw-rw---- 1 root dialout 204, 64 날짜 시간 /dev/ttyAMA0
+# crw-rw---- 1 root dialout 4, 64 날짜 시간 /dev/ttyS0
+
+# 사용자 권한 추가
+sudo usermod -a -G dialout $USER
+sudo usermod -a -G tty $USER
+
+# 재로그인 필요
+logout
+
+# 시리얼 포트 테스트
+python3 -c "
+import serial
+import time
+try:
+    ser = serial.Serial('/dev/serial0', 115200, timeout=2)
+    print('✅ 하드웨어 시리얼 포트 접근 성공')
+    print(f'포트: {ser.port}')
+    print(f'속도: {ser.baudrate}')
+    ser.close()
+except Exception as e:
+    print(f'❌ 시리얼 포트 접근 실패: {e}')
+"
+```
+
+### 4. 아두이노-라즈베리파이 연결
+
+```
+라즈베리파이 GPIO → Arduino
+─────────────────────────────
+GPIO 14 (TXD)  → Arduino Pin 0 (RX)
+GPIO 15 (RXD)  ← Arduino Pin 1 (TX)
+GPIO 6  (GND)  ↔ Arduino GND
+GPIO 4  (5V)   → Arduino VIN (전원)
+
+⚠️ 주의사항:
+1. 라즈베리파이는 3.3V 로직, Arduino는 5V 로직
+2. 대부분의 Arduino는 3.3V 신호를 인식하므로 직접 연결 가능
+3. 필요 시 레벨 컨버터 사용 권장
+```
+
+### 5. 프로젝트 의존성 설치
 
 ```bash
 # 프로젝트 폴더로 이동
@@ -147,7 +202,7 @@ pip3 install -r requirements.txt
 python3 -c "from ultralytics import YOLO; YOLO('yolov11s.pt')"
 ```
 
-### 4. Arduino 설정
+### 6. Arduino 설정
 
 #### Arduino IDE 설치 (Ubuntu/Raspberry Pi)
 ```bash

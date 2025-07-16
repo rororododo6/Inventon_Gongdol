@@ -36,6 +36,19 @@
 | 상태 LED | 13 | 상태 표시 |
 | 부저 | 11 | 알림음 |
 
+### 라즈베리파이-아두이노 시리얼 통신
+| 라즈베리파이 GPIO | Arduino 핀 | 기능 |
+|----------------|-----------|------|
+| GPIO 14 (TXD) | Pin 0 (RX) | 데이터 송신 |
+| GPIO 15 (RXD) | Pin 1 (TX) | 데이터 수신 |
+| GPIO 6 (GND) | GND | 공통 접지 |
+| GPIO 4 (5V) | VIN | 전원 공급 |
+
+**통신 설정:**
+- 포트: `/dev/serial0` (하드웨어 UART)
+- 속도: 115200 bps
+- 타임아웃: 2초
+
 ### 필수 부품
 - **라즈베리파이 4** (4GB 이상 권장)
 - **Arduino Uno**
@@ -76,7 +89,17 @@ pip install -r requirements.txt
 # - Stepper
 ```
 
-### 2. 시스템 실행
+### 2. 하드웨어 시리얼 설정
+```bash
+# 시리얼 설정 도우미 실행
+python3 setup_serial.py
+
+# 또는 메인 런처에서 선택
+python3 main.py
+# → 5. 시리얼 설정 도우미
+```
+
+### 3. 시스템 실행
 ```bash
 # 기본 실행
 python3 run_system.py

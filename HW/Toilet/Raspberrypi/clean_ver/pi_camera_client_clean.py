@@ -120,18 +120,28 @@ class AutoCleaningSystem:
     
     def _display_system_info(self) -> None:
         """시스템 정보 표시"""
+        # 시스템 정보 표시
         system_info = self.factory.get_system_info()
         yolo_info = system_info.get('yolo_model_info', {})
         memory_info = system_info.get('memory_info', {})
         
         self.logger.info("\n" + "="*50)
-        self.logger.info("🎯 PI 카메라 자동 청소 시스템 (YOLOv11s)")
+        self.logger.info("🎯 PI 카메라 자동 청소 시스템 (사용자 정의 모델)")
         self.logger.info("="*50)
         
+        # 메모리 정보
+        available_memory = memory_info.get('available_gb', 0)
+        self.logger.info(f"💾 사용 가능 메모리: {available_memory:.1f}GB")
+        
         # YOLO 모델 정보
-        current_model = yolo_info.get('current_model', 'Unknown')
-        is_yolov11s = yolo_info.get('is_yolov11s', False)
-        if is_yolov11s:
+        current_model = yolo_info.get('name', 'Unknown')
+        model_type = yolo_info.get('type', 'unknown')
+        
+        if model_type == 'custom':
+            self.logger.info(f"🎯 YOLO 모델: {current_model}")
+            self.logger.info(f"   - 새똥 탐지 특화 학습 모델")
+            self.logger.info(f"   - 높은 정확도 기대")
+        elif 'yolov11s' in current_model.lower():
             self.logger.info(f"🎯 YOLO 모델: {current_model} (높은 정확도)")
         else:
             self.logger.info(f"⚡ YOLO 모델: {current_model} (빠른 성능)")
@@ -139,10 +149,6 @@ class AutoCleaningSystem:
         self.logger.info(f"📷 카메라 해상도: {system_info['system_config']['camera_resolution']}")
         self.logger.info(f"🧹 최대 청소 횟수: {system_info['system_config']['max_clean_count']}")
         self.logger.info(f"⚡ 프레임 스킵: {system_info['system_config']['frame_skip_interval']}프레임")
-        
-        # 메모리 정보
-        available_memory = memory_info.get('available_gb', 0)
-        self.logger.info(f"💾 사용 가능한 메모리: {available_memory:.1f}GB")
         
         # 최적화 정보
         if memory_info.get('optimization_applied', False):
