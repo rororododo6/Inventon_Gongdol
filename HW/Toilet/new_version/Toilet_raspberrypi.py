@@ -31,7 +31,7 @@ logger = logging.getLogger("SmartPerchSystem")
 # ================================================================================
 class ArduinoController:
     """아두이노와 시리얼 통신을 담당하는 클래스"""
-    def __init__(self, port='/dev/ttyS0', baudrate=9600):
+    def __init__(self, port='/dev/ttyS0', baudrate=115200):
         """
         Args:
             port (str): 라즈베리파이 4B의 GPIO 14(TX), 15(RX)는 '/dev/ttyS0'에 해당합니다.
@@ -283,7 +283,7 @@ class SmartPerchSystem:
 # ================================================================================
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="스마트 앵무새 횟대 시스템")
-    parser.add_argument("--model", type=str, default="yolov11s.pt", help="커스텀 학습된 YOLO 모델 파일 경로")
+    parser.add_argument("--model", type=str, default="AI/detect/train63/weights/best.pt", help="커스텀 학습된 YOLO 모델 파일 경로")
     parser.add_argument("--confidence", type=float, default=0.4, help="탐지 신뢰도 임계값")
     parser.add_argument("--resolution", type=str, default="640x480", help="카메라 해상도 (예: 640x480)")
     parser.add_argument("--headless", action="store_true", help="GUI 없이 헤드리스 모드로 실행합니다.")
