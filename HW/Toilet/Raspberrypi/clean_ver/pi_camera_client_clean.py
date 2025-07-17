@@ -103,6 +103,33 @@ class AutoCleaningSystem:
         
         try:
             self.logger.info("🎯 자동 청소 시스템 시작!")
+            self.logger.info("")
+            self.logger.info("="*50)
+            self.logger.info("🎯 PI 카메라 자동 청소 시스템 (사용자 정의 모델)")
+            self.logger.info("="*50)
+            system_info = self.factory.get_system_info()
+            memory_info = system_info.get('memory_info', {})
+            memory_gb = memory_info.get('available_gb', 0)
+            self.logger.info(f"💾 사용 가능 메모리: {memory_gb:.1f}GB")
+            self.logger.info("🎯 YOLO 모델: 사용자 정의 학습 모델")
+            self.logger.info("   - 새똥 탐지 특화 학습 모델")
+            self.logger.info("   - 높은 정확도 기대")
+            self.logger.info(f"📷 카메라 해상도: {self.components['camera_manager'].resolution}")
+            self.max_clean_count = system_info['system_config']['max_clean_count']
+            self.logger.info(f"🧹 최대 청소 횟수: {self.max_clean_count}")
+            self.logger.info(f"⚡ 프레임 스킵: {SystemConfig.FRAME_SKIP_INTERVAL}프레임")
+            
+            # 탐지 설정 로깅 추가
+            self.logger.info(f"🔍 탐지 설정:")
+            self.logger.info(f"   - 신뢰도 임계값: {SystemConfig.YOLO_CONFIDENCE:.0%}")
+            self.logger.info(f"   - 누적 커버리지 임계값: {SystemConfig.ACCUMULATED_COVERAGE_THRESHOLD:.0%}")
+            self.logger.info(f"   - 개별 탐지 임계값: {SystemConfig.TARGET_COVERAGE:.1%}")
+            
+            self.logger.info("="*50)
+            self.logger.info("종료하려면 'q' 키를 누르세요.")
+            self.logger.info("시스템 리셋은 'r' 키를 누르세요.")
+            self.logger.info("="*50)
+            
             self.running = True
             self.system_start_time = time.time()
             
@@ -236,14 +263,24 @@ class AutoCleaningSystem:
         """청소 로직 처리"""
         cleaning_manager = self.components['cleaning_manager']
         
+        # 탐지 상태 로깅 (주기적으로)
+        if status.frame_count % 30 == 0:  # 30프레임마다 (약 1초)
+            detection_info = "발견" if status.detection_result.is_detected else "없음"
+            coverage = status.detection_result.coverage_ratio * 100 if status.detection_result else 0
+            self.logger.info(f"📊 프레임 {status.frame_count}: 탐지={detection_info}, "
+                           f"누적 커버리지={coverage:.1f}% (임계값: 30%)")
+        
         # 청소 수행 여부 결정
         if cleaning_manager.should_perform_cleaning(status.detection_result):
             try:
-                success = cleaning_manager.perform_cleaning()
-                if success:
-                    self.logger.info("청소 완료!")
+                coverage_ratio = status.detection_result.coverage_ratio if status.detection_result else 0.0
+                self.logger.info(f"🧹 청소 시작! 누적 커버리지: {coverage_ratio:.1%}")
+                
+                result = cleaning_manager.perform_cleaning(coverage_ratio)
+                if result.success:
+                    self.logger.info(f"✅ 청소 완료! 모드: {result.mode.value}, 소요시간: {result.duration:.2f}초")
                 else:
-                    self.logger.warning("청소 실패")
+                    self.logger.warning(f"❌ 청소 실패: {result.error_message}")
             except Exception as e:
                 self.logger.error(f"청소 실행 중 오류: {e}")
     
@@ -283,7 +320,7 @@ class AutoCleaningSystem:
             font = cv2.FONT_HERSHEY_SIMPLEX
             color = (0, 255, 0) if status.cleaning_status.is_operational else (0, 0, 255)
             
-            # 정보 텍스트들
+            # 기본 정보 텍스트들
             info_texts = [
                 f"프레임: {status.frame_count}",
                 f"탐지: {'발견' if status.detection_result.is_detected else '없음'}",
@@ -291,21 +328,41 @@ class AutoCleaningSystem:
                 f"청소 횟수: {status.cleaning_status.clean_count}/{status.cleaning_status.max_clean_count}",
             ]
             
-            # 센서 정보 추가
-            if status.sensor_data.is_valid:
-                sensor_display = self.components['sensor_manager'].format_sensor_display(status.sensor_data)
-                info_texts.extend([
-                    sensor_display['temperature'],
-                    sensor_display['humidity']
-                ])
+            # 센서 정보 추가 (안전 처리)
+            try:
+                if hasattr(status.sensor_data, 'is_valid') and status.sensor_data.is_valid:
+                    if 'sensor_manager' in self.components:
+                        sensor_display = self.components['sensor_manager'].format_sensor_display(status.sensor_data)
+                        if sensor_display and isinstance(sensor_display, dict):
+                            info_texts.extend([
+                                sensor_display.get('temperature', '온도: 센서 오류'),
+                                sensor_display.get('humidity', '습도: 센서 오류')
+                            ])
+                    else:
+                        info_texts.extend(['온도: 센서 미연결', '습도: 센서 미연결'])
+                else:
+                    info_texts.extend(['온도: 센서 오류', '습도: 센서 오류'])
+            except Exception as sensor_error:
+                self.logger.warning(f"센서 정보 표시 중 오류: {sensor_error}")
+                info_texts.extend(['온도: 센서 오류', '습도: 센서 오류'])
             
             # 텍스트 그리기
             for i, text in enumerate(info_texts):
-                y_pos = 30 + i * 25
-                cv2.putText(frame, text, (10, y_pos), font, 0.6, color, 2)
-                
+                try:
+                    y_pos = 30 + i * 25
+                    cv2.putText(frame, text, (10, y_pos), font, 0.6, color, 2)
+                except Exception as text_error:
+                    self.logger.warning(f"텍스트 '{text}' 그리기 실패: {text_error}")
+                    
         except Exception as e:
             self.logger.error(f"정보 오버레이 추가 실패: {e}")
+            # 기본 정보만 표시
+            try:
+                font = cv2.FONT_HERSHEY_SIMPLEX
+                cv2.putText(frame, f"프레임: {status.frame_count}", (10, 30), font, 0.6, (255, 255, 255), 2)
+                cv2.putText(frame, "센서: 오류", (10, 55), font, 0.6, (0, 0, 255), 2)
+            except:
+                pass  # 완전 실패 시 조용히 넘어감
     
     def _reset_system(self) -> None:
         """시스템 리셋"""

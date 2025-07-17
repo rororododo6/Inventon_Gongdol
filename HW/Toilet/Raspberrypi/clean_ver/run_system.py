@@ -8,6 +8,7 @@ import os
 import sys
 import argparse
 import logging
+import time
 
 def setup_python_path():
     """Python 경로 설정"""
@@ -57,7 +58,10 @@ def check_hardware():
         from picamera2 import Picamera2
         picam2 = Picamera2()
         picam2.start()
+        time.sleep(0.5)  # 짧은 대기
         picam2.stop()
+        picam2.close()  # 카메라 리소스 완전히 해제
+        time.sleep(1.0)  # 카메라 리셋 대기
         print("✅ 라즈베리파이 카메라")
     except Exception as e:
         issues.append(f"카메라: {e}")

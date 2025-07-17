@@ -11,6 +11,8 @@ import time
 import logging
 from typing import Optional, Dict, Any, Union
 from enum import Enum
+from threading import Lock
+from dataclasses import dataclass
 
 class CommandType(Enum):
     """아두이노 명령 타입"""
@@ -57,6 +59,9 @@ class ArduinoClientImproved:
             'failed_responses': 0,
             'timeouts': 0
         }
+
+        # 명령 대기열 관리를 위한 락
+        self.command_lock = Lock()
     
     def connect(self) -> bool:
         """아두이노 연결"""
@@ -64,6 +69,8 @@ class ArduinoClientImproved:
             if self.serial_conn and self.serial_conn.is_open:
                 self.serial_conn.close()
                 
+            self.logger.info(f"아두이노 연결 시도: {self.port} (속도: {self.baudrate})")
+            
             self.serial_conn = serial.Serial(
                 port=self.port,
                 baudrate=self.baudrate,
@@ -71,22 +78,26 @@ class ArduinoClientImproved:
                 write_timeout=self.timeout
             )
             
-            # 연결 안정화를 위한 대기
-            time.sleep(2.0)
+            # 연결 안정화를 위한 긴 대기 (아두이노 부트로더 대기)
+            time.sleep(3.0)  # 2초 → 3초로 증가
             
-            # 버퍼 비우기
-            self.serial_conn.reset_input_buffer()
-            self.serial_conn.reset_output_buffer()
+            # 버퍼 비우기 (여러 번)
+            for i in range(3):
+                self.serial_conn.reset_input_buffer()
+                self.serial_conn.reset_output_buffer()
+                time.sleep(0.5)
             
             self.is_connected = True
-            self.logger.info(f"✅ 아두이노 연결 성공: {self.port}")
+            self.logger.info(f"✅ 아두이노 시리얼 연결 성공: {self.port}")
             
-            # 연결 테스트
+            # 연결 테스트 (더 관대한 기준)
             if self._test_connection():
+                self.logger.info(f"✅ 아두이노 통신 테스트 성공!")
                 return True
             else:
-                self.disconnect()
-                return False
+                self.logger.warning(f"⚠️ 시리얼 연결은 되었지만 통신 테스트 실패")
+                # 통신 테스트 실패해도 연결 유지 (아두이노가 준비되지 않았을 수 있음)
+                return True  # False → True로 변경
                 
         except Exception as e:
             self.logger.error(f"❌ 아두이노 연결 실패: {e}")
@@ -107,9 +118,36 @@ class ArduinoClientImproved:
     def _test_connection(self) -> bool:
         """연결 테스트"""
         try:
+            self.logger.info("아두이노 연결 테스트 시작...")
+            
+            # 1차 테스트: ping 명령
             response = self._send_simple_command("ping")
-            return response is not None and response.get("status") == "ok"
-        except:
+            if response and response.get("status") == "ok":
+                self.logger.info("✅ ping 테스트 성공")
+                return True
+            elif response and "pong" in str(response):
+                self.logger.info("✅ pong 응답 받음")
+                return True
+            
+            # 2차 테스트: 센서 데이터 요청
+            self.logger.info("ping 실패, 센서 데이터로 재테스트...")
+            response = self._send_simple_command("sensor")
+            if response and ("temperature" in response or "temp" in response):
+                self.logger.info("✅ 센서 데이터 테스트 성공")
+                return True
+            
+            # 3차 테스트: 상태 요청
+            self.logger.info("센서 테스트 실패, 상태 요청으로 재테스트...")
+            response = self._send_simple_command("status")
+            if response and ("ready" in response or "status" in response):
+                self.logger.info("✅ 상태 테스트 성공")
+                return True
+            
+            self.logger.warning(f"⚠️ 모든 연결 테스트 실패. 마지막 응답: {response}")
+            return False
+            
+        except Exception as e:
+            self.logger.error(f"❌ 연결 테스트 중 오류: {e}")
             return False
     
     def _send_simple_command(self, cmd: str, params: Optional[Dict] = None) -> Optional[Dict]:
@@ -124,25 +162,27 @@ class ArduinoClientImproved:
             self.logger.warning("아두이노가 연결되지 않음")
             return None
         
-        # 명령 구성 (최소화된 JSON)
-        command = {"c": cmd}  # command -> c (짧게)
-        if params:
-            # 매개변수도 짧게
-            for key, value in params.items():
-                if key == "steps":
-                    command["s"] = value
-                elif key == "speed":
-                    command["sp"] = value
-                elif key == "direction":
-                    command["d"] = value
-                elif key == "angle":
-                    command["a"] = value
+        # 명령 구성 (아두이노 코드와 완전히 호환되는 형식)
+        command = {"c": cmd}  # 아두이노 코드에서 "c" 필드를 찾음
         
-        # JSON 길이 검사
-        json_str = json.dumps(command)
-        if len(json_str) > self.MAX_JSON_LENGTH:
-            self.logger.error(f"JSON 너무 길음: {len(json_str)} > {self.MAX_JSON_LENGTH}")
+        if params:
+            # 매개변수 추가 (아두이노 코드와 호환)
+            for key, value in params.items():
+                if key == "direction":
+                    command["d"] = value  # direction -> d
+                elif key == "state":
+                    command["state"] = value  # LED 상태용
+                else:
+                    command[key] = value
+        
+        # JSON 길이 검사 (아두이노 버퍼 크기 고려)
+        json_str = json.dumps(command, separators=(',', ':'))  # 공백 제거로 압축
+        
+        if len(json_str) > 64:  # 아두이노 버퍼 크기 고려해서 더 작게
+            self.logger.error(f"JSON 너무 길음: {len(json_str)} > 64")
             return None
+        
+        self.logger.info(f"📝 압축된 JSON: {json_str} (길이: {len(json_str)})")
         
         return self._execute_command(json_str)
     
@@ -151,49 +191,86 @@ class ArduinoClientImproved:
         if not self.serial_conn:
             self.logger.error("시리얼 연결이 없음")
             return None
+        
+        # 명령 대기열 관리 - 동시에 여러 명령이 전송되는 것을 방지
+        with self.command_lock:
+            self.stats['sent_commands'] += 1
+            self.logger.info(f"📤 아두이노로 명령 전송: {json_str}")
             
-        self.stats['sent_commands'] += 1
-        
-        for attempt in range(self.RETRY_COUNT):
-            try:
-                # 버퍼 비우기
-                self.serial_conn.reset_input_buffer()
-                
-                # 명령 전송
-                message = json_str + '\n'
-                self.serial_conn.write(message.encode('utf-8'))
-                self.serial_conn.flush()
-                
-                self.logger.debug(f"전송: {json_str}")
-                
-                # 응답 대기
-                time.sleep(self.RESPONSE_DELAY)
-                
-                # 응답 읽기 (타임아웃 포함)
-                response_line = self.serial_conn.readline().decode('utf-8').strip()
-                
-                if response_line:
-                    try:
-                        response = json.loads(response_line)
-                        self.stats['successful_responses'] += 1
-                        self.logger.debug(f"응답: {response}")
-                        return response
-                    except json.JSONDecodeError as e:
-                        self.logger.warning(f"JSON 파싱 실패: {response_line} - {e}")
-                        self.stats['failed_responses'] += 1
-                else:
-                    self.logger.warning(f"응답 없음 (시도 {attempt + 1}/{self.RETRY_COUNT})")
-                    self.stats['timeouts'] += 1
-                
-                # 재시도 전 대기
-                if attempt < self.RETRY_COUNT - 1:
-                    time.sleep(0.1 * (attempt + 1))
+            for attempt in range(self.RETRY_COUNT):
+                try:
+                    # 버퍼 비우기 (더 철저하게)
+                    self.serial_conn.reset_input_buffer()
+                    self.serial_conn.reset_output_buffer()
+                    time.sleep(0.2)  # 0.1초 → 0.2초로 증가
                     
-            except Exception as e:
-                self.logger.error(f"통신 오류 (시도 {attempt + 1}): {e}")
-                self.stats['failed_responses'] += 1
-        
-        return None
+                    # 명령 전송 (확실한 줄바꿈 추가)
+                    message = json_str.strip() + '\n'
+                    self.serial_conn.write(message.encode('utf-8'))
+                    self.serial_conn.flush()
+                    
+                    self.logger.debug(f"전송 완료 (시도 {attempt + 1}/{self.RETRY_COUNT}): {repr(message)}")
+                    
+                    # 응답 대기 (아두이노 처리 시간 고려)
+                    time.sleep(0.5)  # 0.2초 → 0.5초로 증가
+                    
+                    # 응답 읽기 (더 오래 대기)
+                    response_lines = []
+                    start_time = time.time()
+                    
+                    while time.time() - start_time < 4.0:  # 2초 → 4초로 증가
+                        if self.serial_conn.in_waiting > 0:
+                            line = self.serial_conn.readline().decode('utf-8').strip()
+                            if line:
+                                response_lines.append(line)
+                                self.logger.debug(f"받은 라인: {line}")
+                                
+                                # JSON 형태의 응답이면 즉시 처리
+                                if line.startswith('{') and line.endswith('}'):
+                                    break
+                        else:
+                            time.sleep(0.1)
+                    
+                    # 가장 최근 JSON 응답 찾기
+                    json_response = None
+                    for line in reversed(response_lines):
+                        if line.startswith('{') and line.endswith('}'):
+                            json_response = line
+                            break
+                    
+                    if json_response:
+                        self.logger.info(f"📥 아두이노 JSON 응답: {json_response}")
+                        try:
+                            response = json.loads(json_response)
+                            self.stats['successful_responses'] += 1
+                            self.logger.info(f"✅ JSON 파싱 성공: {response}")
+                            return response
+                        except json.JSONDecodeError as e:
+                            self.logger.warning(f"⚠️ JSON 파싱 실패: {json_response} - {e}")
+                            self.stats['failed_responses'] += 1
+                    elif response_lines:
+                        # JSON이 아닌 응답들 로깅
+                        self.logger.info(f"📥 아두이노 텍스트 응답: {response_lines}")
+                        # 마지막 응답을 기반으로 성공 여부 판단
+                        last_response = response_lines[-1].lower()
+                        if any(word in last_response for word in ['completed', 'success', 'ok', 'ready']):
+                            return {"status": "ok", "raw_response": response_lines}
+                    else:
+                        self.logger.warning(f"❌ 응답 없음 (시도 {attempt + 1}/{self.RETRY_COUNT})")
+                        self.stats['timeouts'] += 1
+                    
+                    # 재시도 전 더 긴 대기 (아두이노가 안정화될 시간)
+                    if attempt < self.RETRY_COUNT - 1:
+                        retry_delay = 1.0 * (attempt + 1)  # 0.5초 → 1초로 증가
+                        self.logger.info(f"🔄 재시도 대기: {retry_delay}초 (아두이노 안정화 대기)")
+                        time.sleep(retry_delay)
+                        
+                except Exception as e:
+                    self.logger.error(f"❌ 통신 오류 (시도 {attempt + 1}): {e}")
+                    self.stats['failed_responses'] += 1
+            
+            self.logger.error(f"❌ 모든 재시도 실패: {json_str}")
+            return None
     
     # ===== 새장 화장실 청소 시스템 메서드들 =====
     
@@ -256,6 +333,42 @@ class ArduinoClientImproved:
         """연결 테스트"""
         return self._send_simple_command("ping")
     
+    # ===== 스테핑 모터 메소드들 (CleaningManager 호환성을 위해 추가) =====
+    
+    def move_stepper(self, steps: int, speed: int = 12) -> Optional[Dict]:
+        """
+        스테핑 모터 이동 (서보모터로 대체)
+        
+        Args:
+            steps: 이동할 스텝 수 (양수: 앞으로, 음수: 뒤로)
+            speed: 속도 (무시됨, 서보모터는 고정 속도)
+        """
+        # 스테핑 모터 대신 서보모터 사용
+        direction = 1 if steps > 0 else -1
+        self.logger.info(f"스테핑 모터 명령을 서보모터로 변환: {steps}스텝 → 방향{direction}")
+        
+        # 서보모터 제어
+        result = self.control_servo(direction)
+        
+        # 일정 시간 후 정지
+        import time
+        time.sleep(3.0)  # 3초 동작
+        self.stop_servo()
+        
+        return result
+    
+    def stop_stepper(self) -> Optional[Dict]:
+        """스테핑 모터 정지 (서보모터 정지로 대체)"""
+        return self.stop_servo()
+    
+    def disable_stepper(self) -> Optional[Dict]:
+        """스테핑 모터 비활성화 (서보모터 정지로 대체)"""
+        return self.stop_servo()
+    
+    def reset_stepper_position(self) -> Optional[Dict]:
+        """스테핑 모터 위치 리셋 (서보모터 정지로 대체)"""
+        return self.stop_servo()
+    
     # ===== 유틸리티 메서드들 =====
     
     def get_stats(self) -> Dict[str, Any]:
@@ -277,6 +390,68 @@ class ArduinoClientImproved:
             'failed_responses': 0,
             'timeouts': 0
         }
+    
+    def get_connection_stats(self) -> Dict:
+        """연결 통계 정보 반환"""
+        total_commands = self.stats['sent_commands']
+        success_rate = 0
+        if total_commands > 0:
+            success_rate = (self.stats['successful_responses'] / total_commands) * 100
+        
+        return {
+            "is_connected": self.is_connected,
+            "port": self.port,
+            "total_commands": total_commands,
+            "successful_responses": self.stats['successful_responses'],
+            "failed_responses": self.stats['failed_responses'],
+            "timeouts": self.stats['timeouts'],
+            "success_rate": round(success_rate, 2)
+        }
+    
+    def diagnose_connection(self) -> Dict:
+        """아두이노 연결 진단"""
+        self.logger.info("🔍 아두이노 연결 진단 시작...")
+        
+        if not self.is_connected:
+            return {"status": "error", "message": "아두이노가 연결되지 않음"}
+        
+        # 1. 기본 ping 테스트
+        ping_result = self._send_simple_command("ping")
+        ping_success = ping_result is not None
+        
+        # 2. 센서 데이터 테스트
+        sensor_result = self._send_simple_command("sensor")
+        sensor_success = sensor_result is not None
+        
+        # 3. 상태 확인 테스트
+        status_result = self._send_simple_command("status")
+        status_success = status_result is not None
+        
+        stats = self.get_connection_stats()
+        
+        diagnosis = {
+            "overall_status": "healthy" if (ping_success or sensor_success) else "unhealthy",
+            "tests": {
+                "ping": ping_success,
+                "sensor_data": sensor_success,
+                "status_check": status_success
+            },
+            "connection_stats": stats,
+            "recommendations": []
+        }
+        
+        # 권장사항 생성
+        if stats["success_rate"] < 70:
+            diagnosis["recommendations"].append("통신 성공률이 낮습니다. 아두이노 전원과 케이블을 확인하세요.")
+        
+        if stats["timeouts"] > 5:
+            diagnosis["recommendations"].append("타임아웃이 자주 발생합니다. 아두이노 코드가 무한루프에 빠졌을 수 있습니다.")
+        
+        if not ping_success and not sensor_success:
+            diagnosis["recommendations"].append("모든 테스트 실패. 아두이노를 재시작하세요.")
+        
+        self.logger.info(f"📊 진단 결과: {diagnosis['overall_status']}")
+        return diagnosis
     
     def __enter__(self):
         """Context manager 진입"""

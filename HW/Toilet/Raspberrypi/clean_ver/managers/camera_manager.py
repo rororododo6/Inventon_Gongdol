@@ -59,20 +59,41 @@ class CameraManager:
         try:
             self.logger.info("PI 카메라 초기화 중...")
             
+            # 기존 카메라 인스턴스가 있다면 정리
+            if hasattr(self, 'picam2') and self.picam2 is not None:
+                try:
+                    self.picam2.close()
+                except:
+                    pass
+                self.picam2 = None
+                # 카메라 리셋 대기
+                time.sleep(1.0)
+            
             # Picamera2 객체 생성
             self.picam2 = Picamera2()
             
-            # 카메라 설정
-            camera_config = self.picam2.create_still_configuration(
-                main={"size": self.resolution, "format": "RGB888"}
-            )
-            self.picam2.configure(camera_config)
-            
-            # 카메라 시작
-            self.picam2.start()
-            
-            # 카메라 워밍업
-            self._warmup_camera()
+            # 카메라 설정 - 더 간단한 설정으로 시작
+            try:
+                camera_config = self.picam2.create_preview_configuration(
+                    main={"size": self.resolution, "format": "RGB888"}
+                )
+                self.picam2.configure(camera_config)
+                
+                # 카메라 시작
+                self.picam2.start()
+                
+                # 카메라 워밍업 (시작 후 잠시 대기)
+                self._warmup_camera()
+                
+            except Exception as config_error:
+                self.logger.warning(f"preview 설정 실패, still 설정으로 재시도: {config_error}")
+                # 설정 실패 시 still configuration으로 재시도
+                camera_config = self.picam2.create_still_configuration(
+                    main={"size": self.resolution, "format": "RGB888"}
+                )
+                self.picam2.configure(camera_config)
+                self.picam2.start()
+                self._warmup_camera()
             
             self.is_initialized = True
             self.logger.info(f"PI 카메라 초기화 완료! 해상도: {self.resolution}, FPS: {self.framerate}")
@@ -80,6 +101,13 @@ class CameraManager:
         except Exception as e:
             error_msg = f"PI 카메라 초기화 실패: {e}"
             self.logger.error(error_msg)
+            # 실패 시 정리
+            if hasattr(self, 'picam2') and self.picam2 is not None:
+                try:
+                    self.picam2.close()
+                except:
+                    pass
+                self.picam2 = None
             raise CameraError(error_msg)
     
     def _warmup_camera(self) -> None:
@@ -87,12 +115,20 @@ class CameraManager:
         self.logger.debug(f"카메라 워밍업 중... ({self.warmup_time}초)")
         time.sleep(self.warmup_time)
         
-        # 몇 개의 테스트 프레임 캡처
-        for _ in range(3):
+        # 카메라가 완전히 준비될 때까지 대기
+        time.sleep(0.5)
+        
+        # 몇 개의 테스트 프레임 캡처 (안전하게)
+        for i in range(3):
             try:
-                self.picam2.capture_array()
-            except Exception:
-                pass  # 워밍업 중에는 에러 무시
+                time.sleep(0.1)  # 각 캡처 사이 약간의 대기
+                frame = self.picam2.capture_array()
+                self.logger.debug(f"워밍업 프레임 {i+1} 캡처 성공: {frame.shape}")
+            except Exception as e:
+                self.logger.debug(f"워밍업 프레임 {i+1} 캡처 실패: {e}")
+                # 첫 번째 캡처가 실패하면 조금 더 대기
+                if i == 0:
+                    time.sleep(1.0)
         
         self.logger.debug("카메라 워밍업 완료")
     
@@ -219,7 +255,16 @@ class CameraManager:
         
         try:
             if self.picam2 is not None:
-                self.picam2.stop()
+                try:
+                    self.picam2.stop()
+                except Exception as e:
+                    self.logger.debug(f"카메라 정지 중 오류 (무시): {e}")
+                
+                try:
+                    self.picam2.close()
+                except Exception as e:
+                    self.logger.debug(f"카메라 종료 중 오류 (무시): {e}")
+                
                 self.picam2 = None
             
             self.is_initialized = False

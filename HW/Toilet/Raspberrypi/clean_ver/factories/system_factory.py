@@ -102,6 +102,35 @@ class ArduinoClientStub:
     def reset_emergency_stop(self):
         print("🔧 [STUB] 긴급 정지 해제 시뮬레이션")
         return {"status": "emergency_reset"}
+    
+    # 누락된 메소드들 추가
+    def control_servo(self, direction: int):
+        print(f"🔧 [STUB] 서보모터 제어 시뮬레이션: 방향={direction}")
+        return {"status": "success", "direction": direction}
+    
+    def stop_servo(self):
+        print("🔧 [STUB] 서보모터 정지 시뮬레이션")
+        return {"status": "stopped"}
+    
+    def system_test(self):
+        print("🔧 [STUB] 시스템 테스트 시뮬레이션")
+        return {"status": "test_completed"}
+    
+    def reset_cleaning_cycles(self):
+        print("🔧 [STUB] 청소 횟수 리셋 시뮬레이션")
+        return {"status": "cycles_reset"}
+    
+    def handle_trash_empty(self):
+        print("🔧 [STUB] 쓰레기통 비우기 처리 시뮬레이션")
+        return {"status": "trash_handled"}
+    
+    def ping(self):
+        print("🔧 [STUB] Ping 테스트")
+        return {"status": "pong"}
+    
+    def control_led(self, state: bool):
+        print(f"🔧 [STUB] LED 제어 시뮬레이션: {'켜기' if state else '끄기'}")
+        return {"status": "led_controlled", "state": state}
 
 class SystemFactory:
     """시스템 구성요소 팩토리"""
@@ -286,10 +315,14 @@ class SystemFactory:
         """청소 관리자 생성"""
         if 'cleaning_manager' not in self._components:
             try:
-                # 아두이노 클라이언트 의존성 주입
+                # 의존성 주입: 아두이노 클라이언트와 탐지 관리자
                 arduino_client = self.create_arduino_client()
+                detection_manager = self.create_detection_manager()
                 
-                self._components['cleaning_manager'] = CleaningManager(arduino_client)
+                self._components['cleaning_manager'] = CleaningManager(
+                    arduino_client=arduino_client,
+                    detection_manager=detection_manager  # 누적 영역 리셋을 위해 전달
+                )
                 self.logger.info("청소 관리자 생성 완료")
             except Exception as e:
                 error_msg = f"청소 관리자 생성 실패: {e}"

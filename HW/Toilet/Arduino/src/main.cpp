@@ -2,7 +2,6 @@
 #include <ArduinoJson.h>  // JSON 라이브러리
 #include <DHT11.h>  // DHT11 센서 라이브러리
 #include <Servo.h>  // 서보 모터 라이브러리
-//#include "functions.h"  // 함수 헤더 파일
 
 // ========== 시스템 정보 ==========
 const char SYSTEM_VERSION[] PROGMEM = "1.3.1";  // 클린코딩 버전
@@ -37,9 +36,9 @@ namespace SystemConfig {
 
 namespace ServoConfig {
   const int SERVO_STOP = 1500;           // 정지 위치 (1500us)
-  const int SERVO_FORWARD = 1700;        // 앞으로 회전 (1700us)
-  const int SERVO_BACKWARD = 1300;       // 뒤로 회전 (1300us)
-  const unsigned long CLEANING_DURATION = 3000;  // 청소 시간 (3초)
+  const int SERVO_FORWARD = 3000;        // 앞으로 회전 (1700us)
+  const int SERVO_BACKWARD = 3000;       // 뒤로 회전 (1300us)
+  const unsigned long CLEANING_DURATION = 6000;  // 청소 시간 (3초)
   const int SERVO_CYCLE_TIME = 20;       // PWM 주기 (20ms)
 }
 
@@ -186,7 +185,7 @@ void loop() {
 // ========== 초기화 함수들 ==========
 void initializeSystem() {
   cleaningServo.attach(CLEANING_SERVO_PIN);
-  cleaningServo.writeMicroseconds(ServoConfig::SERVO_STOP); // 초기 정지 상태
+  cleaningServo.write(90); // 초기 정지 상태
 }
 
 void initializePins() {
@@ -480,20 +479,22 @@ void controlServo(int direction) {
   sensorData.servoDirection = direction;
   
   if (direction == 1) { // 앞으로
-    cleaningServo.writeMicroseconds(ServoConfig::SERVO_FORWARD);
+    cleaningServo.write(0);
     sensorData.servoRunning = true;
+    delay(3000)
   } else if (direction == -1) { // 뒤로
-    cleaningServo.writeMicroseconds(ServoConfig::SERVO_BACKWARD);
+    cleaningServo.write(180);
     sensorData.servoRunning = true;
+    delay(3000)
   } else { // 정지
-    cleaningServo.writeMicroseconds(ServoConfig::SERVO_STOP);
+    cleaningServo.write(90);
     sensorData.servoRunning = false;
   }
 }
 
 // ========== 서보 모터 정지 ==========
 void stopServo() {
-  cleaningServo.writeMicroseconds(ServoConfig::SERVO_STOP);
+  cleaningServo.write(90);
   sensorData.servoRunning = false;
   sensorData.servoDirection = 0;
 }

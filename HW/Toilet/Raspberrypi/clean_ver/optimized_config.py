@@ -18,54 +18,46 @@ class SystemConfig:
     
     # 탐지 모델 설정
     YOLO_MODEL_PATH = "/home/parrot1/gongdol/Inventon_Gongdol/HW/Toilet/AI/detect/train63/weights/best.pt"  # 사용자 정의 학습된 모델
-    YOLO_CONFIDENCE = 0.6  # 신뢰도 임계값
+    YOLO_CONFIDENCE = 0.3  # 신뢰도 임계값 (기존 시스템과 동일하게 낮춤)
     YOLO_IOU_THRESHOLD = 0.5  # NMS IOU 임계값
-    TARGET_COVERAGE = 0.05  # 더 정확한 모델이므로 커버리지 기준 낮춤
+    TARGET_COVERAGE = 0.01  # 더 민감한 탐지를 위해 커버리지 기준도 낮춤
+    
+    # 누적 탐지 설정
+    ACCUMULATED_COVERAGE_THRESHOLD = 0.3  # 누적 커버리지 30% 임계값 (청소 트리거)
     
     # 성능 최적화 설정 - YOLOv11s에 맞게 조정
-    FRAME_SKIP_INTERVAL = 4  # YOLOv11s는 더 무거우므로 프레임 스킵 증가
+    FRAME_SKIP_INTERVAL = 2  # 프레임 스킵 간격 줄임 (2프레임마다 1번 처리)
     ENABLE_FRAME_SKIP = True  # 프레임 스킵 활성화 여부
     
-    # 라즈베리파이 메모리 최적화 설정
-    @classmethod
-    def get_optimized_settings(cls):
-        """라즈베리파이 메모리에 따른 최적화 설정"""
-        available_memory = psutil.virtual_memory().available / (1024**3)  # GB
-        
-        if available_memory < 3.0:  # 3GB 미만 - 메모리 부족으로 해상도 낮춤
-            return {
-                'camera_resolution': (320, 240),
-                'frame_skip_interval': 6,  # 더 많이 스킵
-                'yolo_model_path': cls.YOLO_MODEL_PATH,  # 사용자 정의 모델 사용
-                'yolo_confidence': 0.5,  # 신뢰도 약간 낮춤
-                'enable_frame_skip': True,
-                'batch_size': 1,
-                'warning_message': '⚠️ 메모리 부족으로 해상도 및 프레임레이트 조정됨'
-            }
-        elif available_memory < 5.0:  # 5GB 미만
-            return {
-                'camera_resolution': (480, 360),
-                'frame_skip_interval': 4,
-                'yolo_model_path': cls.YOLO_MODEL_PATH,  # 사용자 정의 모델 사용
-                'yolo_confidence': 0.6,
-                'enable_frame_skip': True,
-                'batch_size': 1,
-                'warning_message': '⚠️ 성능 최적화를 위해 해상도 조정됨'
-            }
-        else:  # 5GB 이상
-            return {
-                'camera_resolution': (640, 480),
-                'frame_skip_interval': 3,
-                'yolo_model_path': cls.YOLO_MODEL_PATH,  # 사용자 정의 모델 사용
-                'yolo_confidence': 0.6,
-                'enable_frame_skip': True,
-                'batch_size': 1,
-                'warning_message': None
-            }
+    # 메모리별 최적화 설정
+    MEMORY_CONFIGS = {
+        'low': {  # 2GB 이하 - 저성능 라즈베리파이
+            'resolution': (320, 240),
+            'yolo_confidence': 0.3,  # 신뢰도 낮춤
+            'frame_skip': 6,
+            'enable_display': False,
+            'camera_fps': 15
+        },
+        'medium': {  # 2-4GB - 표준 라즈베리파이
+            'resolution': (640, 480), 
+            'yolo_confidence': 0.3,  # 신뢰도 낮춤
+            'frame_skip': 4,
+            'enable_display': True,
+            'camera_fps': 20
+        },
+        'high': {  # 4GB 이상 - 고성능 라즈베리파이
+            'resolution': (640, 480),
+            'yolo_confidence': 0.3,  # 신뢰도 낮춤 
+            'frame_skip': 2,
+            'enable_display': True,
+            'camera_fps': 30
+        }
+    }
     
-    # 센서 설정
-    SENSOR_UPDATE_INTERVAL = 3  # 3초마다 센서 데이터 업데이트
-    SENSOR_ERROR_VALUE = -999   # 센서 오류 시 반환값
+    # === 센서 관련 설정 ===
+    SENSOR_UPDATE_INTERVAL = 5  # 5초마다 센서 데이터 업데이트 (3초 → 5초로 증가)
+    SENSOR_ERROR_VALUE = -999  # 센서 오류 시 기본값
+    SENSOR_MAX_RETRIES = 3     # 센서 읽기 최대 재시도
     
     # 청소 동작 설정
     STEPS_PER_REVOLUTION = 2048
@@ -121,6 +113,34 @@ class SystemConfig:
                 return f.read().strip()
         except:
             return "Unknown"
+    
+    @classmethod
+    def get_optimized_settings(cls):
+        """라즈베리파이 메모리에 따른 최적화 설정"""
+        import psutil
+        available_memory = psutil.virtual_memory().available / (1024**3)  # GB
+        
+        if available_memory < 2.0:  # 2GB 미만
+            config = cls.MEMORY_CONFIGS['low']
+            warning = '⚠️ 메모리 부족으로 최소 성능 모드 실행'
+        elif available_memory < 4.0:  # 2-4GB
+            config = cls.MEMORY_CONFIGS['medium'] 
+            warning = '⚠️ 표준 성능 모드 실행'
+        else:  # 4GB 이상
+            config = cls.MEMORY_CONFIGS['high']
+            warning = None
+            
+        return {
+            'camera_resolution': config['resolution'],
+            'frame_skip_interval': config['frame_skip'],
+            'yolo_model_path': cls.YOLO_MODEL_PATH,
+            'yolo_confidence': config['yolo_confidence'],
+            'enable_frame_skip': True,
+            'enable_display': config['enable_display'],
+            'camera_fps': config['camera_fps'],
+            'batch_size': 1,
+            'warning_message': warning
+        }
 
 class PerformanceConfig:
     """성능 최적화 관련 설정"""

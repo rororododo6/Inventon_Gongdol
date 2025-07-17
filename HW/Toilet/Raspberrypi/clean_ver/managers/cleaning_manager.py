@@ -53,9 +53,16 @@ class CleaningError(Exception):
 class CleaningManager:
     """새장 화장실 청소 관리자 클래스"""
     
-    def __init__(self, arduino_client):
-        """초기화"""
+    def __init__(self, arduino_client, detection_manager=None):
+        """
+        초기화
+        
+        Args:
+            arduino_client: 아두이노 클라이언트
+            detection_manager: 탐지 관리자 (누적 영역 리셋용)
+        """
         self.arduino_client = arduino_client
+        self.detection_manager = detection_manager  # 누적 영역 리셋을 위해 추가
         self.logger = logging.getLogger(__name__)
         
         # 청소 설정
@@ -111,6 +118,11 @@ class CleaningManager:
             if result.success:
                 self.successful_cleanings += 1
                 self.logger.info(f"청소 완료: {adjusted_mode.value} 모드, 소요시간: {result.duration:.2f}초")
+                
+                # 청소 완료 후 누적 영역 리셋
+                if self.detection_manager and hasattr(self.detection_manager, 'reset_accumulated_areas'):
+                    self.detection_manager.reset_accumulated_areas()
+                    self.logger.info("청소 완료 후 누적 새똥 영역 초기화")
             else:
                 self.failed_cleanings += 1
                 self.logger.error(f"청소 실패: {result.error_message}")
@@ -308,6 +320,28 @@ class CleaningManager:
             return True
         except Exception as e:
             self.logger.error(f"청소 횟수 초기화 실패: {str(e)}")
+            return False
+    
+    def should_perform_cleaning(self, detection_result) -> bool:
+        """청소 수행 여부 결정"""
+        try:
+            # 탐지 결과가 없으면 청소 안함
+            if not detection_result:
+                self.logger.debug("청소 미실행: 탐지 결과 없음")
+                return False
+                
+            if not detection_result.is_detected:
+                coverage = detection_result.coverage_ratio * 100 if detection_result.coverage_ratio else 0
+                self.logger.debug(f"청소 미실행: 탐지 없음 (누적 커버리지: {coverage:.1f}%)")
+                return False
+            
+            # 탐지된 경우 청소 실행
+            coverage = detection_result.coverage_ratio * 100 if detection_result.coverage_ratio else 0
+            self.logger.info(f"🚨 청소 조건 만족! 누적 커버리지: {coverage:.1f}% >= 30%")
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"청소 조건 확인 중 오류: {str(e)}")
             return False
     
     def get_status(self) -> CleaningStatus:
