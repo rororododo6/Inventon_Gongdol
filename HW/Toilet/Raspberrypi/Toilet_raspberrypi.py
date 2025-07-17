@@ -13,6 +13,7 @@ import cv2
 import numpy as np
 import logging
 import argparse
+import glob
 from pathlib import Path
 from ultralytics import YOLO
 from picamera2 import Picamera2
@@ -31,16 +32,23 @@ logger = logging.getLogger("SmartPerchSystem")
 # ================================================================================
 class ArduinoController:
     """아두이노와 시리얼 통신을 담당하는 클래스"""
-    def __init__(self, port='/dev/ttyS0', baudrate=115200):
+    def __init__(self, port=None, baudrate=115200):
         """
         Args:
-            port (str): 라즈베리파이 4B의 GPIO 14(TX), 15(RX)는 '/dev/ttyS0'에 해당합니다.
+            port (str): 시리얼 포트. None이면 자동으로 검색합니다.
+                        라즈베리파이 4B의 GPIO 14(TX), 15(RX)는 '/dev/ttyAMA0'에 해당합니다.
                         만약 USB로 연결했다면 '/dev/ttyACM0' 또는 '/dev/ttyUSB0'일 수 있습니다.
-            baudrate (int): 아두이노 코드와 동일한 9600으로 설정합니다.
+            baudrate (int): 아두이노 코드와 동일한 115200으로 설정합니다.
         """
-        self.port = port
         self.baudrate = baudrate
         self.ser = None
+        
+        # 포트가 지정되지 않은 경우 자동 검색
+        if port is None:
+            port = self._find_arduino_port()
+        
+        self.port = port
+        
         try:
             self.ser = serial.Serial(self.port, self.baudrate, timeout=0.1)
             time.sleep(2) # 아두이노 리셋 및 안정화 대기
@@ -50,6 +58,38 @@ class ArduinoController:
             logger.error("팁: 'sudo raspi-config' -> 3 Interface Options -> I6 Serial Port에서")
             logger.error("    'login shell over serial'은 No, 'serial port hardware'는 Yes로 설정했는지 확인하세요.")
             raise ConnectionError(f"아두이노에 연결할 수 없습니다. 포트({self.port})와 권한을 확인하세요.")
+
+    def _find_arduino_port(self):
+        """사용 가능한 시리얼 포트를 자동으로 찾습니다."""
+        # 라즈베리파이에서 일반적으로 사용되는 포트들 우선순위 순으로 확인
+        candidate_ports = [
+            '/dev/ttyAMA0',    # GPIO 시리얼 (primary)
+            '/dev/ttyS0',      # Mini UART
+            '/dev/ttyACM0',    # USB CDC
+            '/dev/ttyUSB0',    # USB-to-Serial
+        ]
+        
+        # 추가로 사용 가능한 모든 시리얼 포트 검색
+        candidate_ports.extend(glob.glob('/dev/ttyUSB*'))
+        candidate_ports.extend(glob.glob('/dev/ttyACM*'))
+        
+        for port in candidate_ports:
+            try:
+                # 포트가 존재하는지 확인
+                if Path(port).exists():
+                    logger.info(f"포트 테스트 중: {port}")
+                    # 간단한 연결 테스트
+                    test_serial = serial.Serial(port, self.baudrate, timeout=0.5)
+                    test_serial.close()
+                    logger.info(f"사용 가능한 포트 발견: {port}")
+                    return port
+            except (serial.SerialException, PermissionError) as e:
+                logger.debug(f"포트 {port} 테스트 실패: {e}")
+                continue
+        
+        # 기본값으로 돌아감
+        logger.warning("사용 가능한 포트를 찾을 수 없습니다. 기본값 /dev/ttyAMA0 사용")
+        return '/dev/ttyAMA0'
 
     def send_command(self, command: bytes):
         if self.ser and self.ser.is_open:
@@ -93,12 +133,15 @@ class DroppingsDetector:
         
         new_detections = []
         for r in results:
-            for box in r.boxes:
-                if self.model.names[int(box.cls)] == 'poop':
-                    new_detections.append(box.xyxy[0].cpu().numpy().astype(int))
+            if r.boxes is not None:
+                for box in r.boxes:
+                    # 클래스 이름을 'Bird Poop'으로 수정하거나 모든 클래스 허용
+                    if self.model.names[int(box.cls)] in ['Bird Poop', 'poop']:
+                        new_detections.append(box.xyxy[0].cpu().numpy().astype(int))
         
         if new_detections:
             self._merge_detections(new_detections)
+            logger.info(f"새똥 탐지: {len(new_detections)}개 발견, 총 누적 영역: {len(self.accumulated_boxes)}개")
             
         return annotated_frame
 
@@ -283,7 +326,7 @@ class SmartPerchSystem:
 # ================================================================================
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="스마트 앵무새 횟대 시스템")
-    parser.add_argument("--model", type=str, default="AI/detect/train63/weights/best.pt", help="커스텀 학습된 YOLO 모델 파일 경로")
+    parser.add_argument("--model", type=str, default="/home/parrot1/gongdol/Inventon_Gongdol/HW/Toilet/AI/detect/train63/weights/best.pt", help="커스텀 학습된 YOLO 모델 파일 경로")
     parser.add_argument("--confidence", type=float, default=0.4, help="탐지 신뢰도 임계값")
     parser.add_argument("--resolution", type=str, default="640x480", help="카메라 해상도 (예: 640x480)")
     parser.add_argument("--headless", action="store_true", help="GUI 없이 헤드리스 모드로 실행합니다.")
